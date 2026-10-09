@@ -33,15 +33,15 @@ struct PressureCurveTests {
 
 struct StrokeBuilderTests {
     @Test func inputWithoutPressureUsesTheBaseWidth() {
-        var builder = StrokeBuilder(baseWidth: 3, curve: PressureCurve(sensitivity: 1))
+        var builder = StrokeBuilder(baseWidth: 3, curve: PressureCurve(sensitivity: 1), smoothing: 1.2)
         for x in stride(from: 0.0, through: 50, by: 2) {
             builder.add(CGPoint(x: x, y: 10), force: nil)
         }
-        #expect(builder.finishedPoints().allSatisfy { $0.width == 3 })
+        #expect(builder.finishedPoints().allSatisfy { abs($0.width - 3) < 1e-4 })
     }
 
     @Test func nearbySamplesAreMergedButTheStrokeEndsAtThePen() {
-        var builder = StrokeBuilder(baseWidth: 2, curve: PressureCurve())
+        var builder = StrokeBuilder(baseWidth: 2, curve: PressureCurve(), smoothing: 1.2)
         #expect(builder.add(CGPoint(x: 0, y: 0), force: 0.3) == 0)
         #expect(builder.add(CGPoint(x: 0.1, y: 0), force: 0.3) == nil)
         builder.add(CGPoint(x: 10, y: 0), force: 0.3)
@@ -51,7 +51,7 @@ struct StrokeBuilderTests {
     }
 
     @Test func forceUpdatesChangeTheWidth() {
-        var builder = StrokeBuilder(baseWidth: 2, curve: PressureCurve(sensitivity: 1))
+        var builder = StrokeBuilder(baseWidth: 2, curve: PressureCurve(sensitivity: 1), smoothing: 1.2)
         let index = builder.add(CGPoint(x: 0, y: 0), force: 0.05)!
         let before = builder.finishedPoints()[index].width
         builder.updateForce(0.6, at: index)
@@ -59,7 +59,7 @@ struct StrokeBuilderTests {
     }
 
     @Test func livePointsIncludePredictions() {
-        var builder = StrokeBuilder(baseWidth: 2, curve: PressureCurve())
+        var builder = StrokeBuilder(baseWidth: 2, curve: PressureCurve(), smoothing: 1.2)
         builder.add(CGPoint(x: 0, y: 0), force: 0.3)
         builder.add(CGPoint(x: 10, y: 0), force: 0.3)
         let live = builder.livePoints(predicted: [CGPoint(x: 15, y: 0)])
@@ -104,7 +104,7 @@ struct StrokeGeometryTests {
     /// Overlapping capsules must add up, not cancel out: every point along a stroke with sharp
     /// turns and a self-crossing loop must be filled.
     @Test func sharpTurnsAndLoopsHaveNoHoles() {
-        var builder = StrokeBuilder(baseWidth: 3, curve: PressureCurve())
+        var builder = StrokeBuilder(baseWidth: 3, curve: PressureCurve(), smoothing: 1.2)
         var centerline: [CGPoint] = []
         let corners = [CGPoint(x: 10, y: 10), CGPoint(x: 60, y: 60), CGPoint(x: 15, y: 60), CGPoint(x: 70, y: 5), CGPoint(x: 70, y: 70)]
         for (a, b) in zip(corners, corners.dropFirst()) {
@@ -187,48 +187,67 @@ struct UndoHistoryTests {
 }
 
 struct NotebookFolderTests {
-    @Test func savesAndLoadsNotesPagesAndInk() throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "NotebookFolderTests-\(UUID().uuidString)")
+    private func makeRoot() -> URL {
+        FileManager.default.temporaryDirectory.appending(path: "NotebookFolderTests-\(UUID().uuidString)")
+    }
+
+    @Test func eachNoteIsOnePackageNamedAfterItsTitle() throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = NotebookFolder(root: root, deviceID: UUID())
+
+        let first = try folder.createNote(title: "Biology")
+        let second = try folder.createNote(title: "Biology")
+        let odd = try folder.createNote(title: " a/b: c ")
+        #expect(first.url.lastPathComponent == "Biology.scarnote")
+        #expect(second.url.lastPathComponent == "Biology 2.scarnote")
+        #expect(odd.url.lastPathComponent == "a-b- c.scarnote")
+
+        // Only note packages show up at the top level.
+        let names = try FileManager.default.contentsOfDirectory(atPath: root.path(percentEncoded: false)).sorted()
+        #expect(names == ["Biology 2.scarnote", "Biology.scarnote", "a-b- c.scarnote"])
+        #expect(Set(try folder.loadNotes().map(\.record)) == [first.record, second.record, odd.record])
+    }
+
+    @Test func savesAndLoadsPagesAndInk() throws {
+        let root = makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let ipad = NotebookFolder(root: root, deviceID: UUID())
         let mac = NotebookFolder(root: root, deviceID: UUID())
-
-        let note = NoteRecord(title: "Biology")
-        try ipad.save(note)
-        #expect(try ipad.loadNotes() == [note])
+        let note = try ipad.createNote(title: "Biology")
 
         let second = PageRecord(sortKey: 2, size: PageSize.a4, paper: .whiteLined)
         let first = PageRecord(sortKey: 1, size: PageSize.a4, paper: .whiteLined)
-        try ipad.save(second, inNote: note.id)
-        try ipad.save(first, inNote: note.id)
+        try ipad.save(second, inNoteAt: note.url)
+        try ipad.save(first, inNoteAt: note.url)
 
         let ipadInk = DeviceInk(strokes: Array(DemoInk.strokes().prefix(2)))
         let macInk = DeviceInk(strokes: [DemoInk.strokes()[3]], erasedStrokeIDs: [ipadInk.strokes[0].id])
-        try ipad.saveOwnInk(ipadInk, page: first.id, inNote: note.id)
-        try mac.saveOwnInk(macInk, page: first.id, inNote: note.id)
+        try ipad.saveOwnInk(ipadInk, page: first.id, inNoteAt: note.url)
+        try mac.saveOwnInk(macInk, page: first.id, inNoteAt: note.url)
 
-        let pages = try mac.loadPages(ofNote: note.id)
+        let pages = try mac.loadPages(inNoteAt: note.url)
         #expect(pages.map(\.record) == [first, second])
         #expect(pages[0].inks == [ipad.deviceID: ipadInk, mac.deviceID: macInk])
         #expect(pages[1].inks.isEmpty)
     }
 
     @Test func unreadableInkOnlyFailsForThisDevicesOwnFile() throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "NotebookFolderTests-\(UUID().uuidString)")
+        let root = makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let ipad = NotebookFolder(root: root, deviceID: UUID())
         let mac = NotebookFolder(root: root, deviceID: UUID())
-        let note = NoteRecord(title: "Biology")
+        let note = try ipad.createNote(title: "Biology")
         let page = PageRecord(sortKey: 1, size: PageSize.a4, paper: .whiteLined)
-        try ipad.save(page, inNote: note.id)
-        let pageDirectory = root.appending(path: "notes/\(note.id.uuidString)/pages/\(page.id.uuidString)")
+        try ipad.save(page, inNoteAt: note.url)
+        let pageDirectory = note.url.appending(path: "Pages/\(page.id.uuidString)")
         try Data("garbage".utf8).write(to: pageDirectory.appending(path: "\(mac.deviceID.uuidString).ink"))
 
         // The iPad skips the Mac's unreadable file…
-        #expect(try ipad.loadPages(ofNote: note.id).first?.inks.isEmpty == true)
+        #expect(try ipad.loadPages(inNoteAt: note.url).first?.inks.isEmpty == true)
         // …but the Mac must not open the page without its own ink.
         #expect(throws: InkCodec.DecodeError.notAnInkFile) {
-            try mac.loadPages(ofNote: note.id)
+            try mac.loadPages(inNoteAt: note.url)
         }
     }
 }

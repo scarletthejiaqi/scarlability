@@ -1,9 +1,9 @@
 import CoreGraphics
 
-/// Collects pen samples for the stroke being drawn and smooths them into `InkPoint`s.
+/// Collects pen samples for the stroke being drawn and turns them into smooth `InkPoint`s.
 ///
-/// Positions get light exponential smoothing so shaky lines look clean, and widths are smoothed
-/// separately so pressure changes don't make the edge look jittery.
+/// While writing and after lifting, points go through the same `StrokeSmoothing`, so the stroke
+/// doesn't visibly change when the pen lifts.
 public struct StrokeBuilder: Sendable {
     private struct Sample: Sendable {
         var location: CGPoint
@@ -13,20 +13,18 @@ public struct StrokeBuilder: Sendable {
 
     public let baseWidth: Double
     public let curve: PressureCurve
+    /// Position smoothing σ in page points.
+    public let smoothing: CGFloat
     private var samples: [Sample] = []
-    private var lastRawLocation: CGPoint?
 
-    /// Weight of each new raw position; lower is smoother but trails the pen more.
-    static let positionSmoothing: CGFloat = 0.55
-    /// Weight of each new width.
-    static let widthSmoothing = 0.3
     /// Samples closer than this (in page points) to the previous one only update its force.
-    static let minimumSpacing: CGFloat = 0.25
+    static let minimumSpacing: CGFloat = 0.15
     static let minimumWidth = 0.2
 
-    public init(baseWidth: Double, curve: PressureCurve) {
+    public init(baseWidth: Double, curve: PressureCurve, smoothing: CGFloat) {
         self.baseWidth = baseWidth
         self.curve = curve
+        self.smoothing = smoothing
     }
 
     public var isEmpty: Bool { samples.isEmpty }
@@ -35,21 +33,11 @@ public struct StrokeBuilder: Sendable {
     /// was too close to the previous sample and only refreshed that sample's force.
     @discardableResult
     public mutating func add(_ location: CGPoint, force: Double?) -> Int? {
-        lastRawLocation = location
-        guard let previous = samples.last else {
-            samples.append(Sample(location: location, force: force))
-            return 0
-        }
-        let a = Self.positionSmoothing
-        let smoothed = CGPoint(
-            x: previous.location.x + (location.x - previous.location.x) * a,
-            y: previous.location.y + (location.y - previous.location.y) * a
-        )
-        guard smoothed.distance(to: previous.location) >= Self.minimumSpacing else {
+        if let last = samples.last, last.location.distance(to: location) < Self.minimumSpacing {
             if let force { samples[samples.count - 1].force = force }
             return nil
         }
-        samples.append(Sample(location: smoothed, force: force))
+        samples.append(Sample(location: location, force: force))
         return samples.count - 1
     }
 
@@ -59,32 +47,27 @@ public struct StrokeBuilder: Sendable {
         samples[index].force = force
     }
 
-    /// Points to show while drawing: the smoothed stroke, reaching all the way to the pen tip and on
-    /// through the system's predicted locations.
+    /// Points to show while drawing, continuing through the system's predicted pen locations to
+    /// hide latency.
     public func livePoints(predicted: [CGPoint] = []) -> [InkPoint] {
-        var points = finishedPoints()
-        guard let last = points.last else { return [] }
-        points += predicted.map { InkPoint($0, width: Double(last.width)) }
-        return points
-    }
-
-    /// The final points, ending exactly where the pen lifted.
-    public func finishedPoints() -> [InkPoint] {
-        var points = smoothedPoints()
-        if let last = points.last, let raw = lastRawLocation, raw.distance(to: last.location) >= Self.minimumSpacing {
-            points.append(InkPoint(raw, width: Double(last.width)))
+        var points = rawPoints()
+        guard var last = points.last else { return [] }
+        for location in predicted where location.distance(to: last.location) >= Self.minimumSpacing {
+            last = InkPoint(location, width: Double(last.width))
+            points.append(last)
         }
-        return points
+        return StrokeSmoothing.smooth(points, radius: smoothing)
     }
 
-    private func smoothedPoints() -> [InkPoint] {
-        var width: Double?
-        return samples.map { sample in
+    /// The final points.
+    public func finishedPoints() -> [InkPoint] {
+        StrokeSmoothing.smooth(rawPoints(), radius: smoothing)
+    }
+
+    private func rawPoints() -> [InkPoint] {
+        samples.map { sample in
             let factor = sample.force.map(curve.widthFactor(forNormalizedForce:)) ?? 1
-            let target = max(baseWidth * factor, Self.minimumWidth)
-            let smoothed = width.map { $0 + (target - $0) * Self.widthSmoothing } ?? target
-            width = smoothed
-            return InkPoint(sample.location, width: smoothed)
+            return InkPoint(sample.location, width: max(baseWidth * factor, Self.minimumWidth))
         }
     }
 }

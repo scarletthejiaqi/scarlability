@@ -1,14 +1,22 @@
 import Foundation
 
-/// Reads and writes notes in the folder the user picked (normally in iCloud Drive):
+/// Reads and writes notes in the app's notes folder (normally `iCloud Drive/Scarlability`).
 ///
-///     library/notes/<noteID>.json
-///     notes/<noteID>/pages/<pageID>/page.json
-///     notes/<noteID>/pages/<pageID>/<deviceID>.ink
+/// Each note is one `.scarnote` package, a folder that the Files app and Finder show as a single
+/// item named after the note:
 ///
+///     Scarlability/
+///       Test Note.scarnote/
+///         Note.json
+///         Pages/<pageID>/Page.json
+///         Pages/<pageID>/<deviceID>.ink
+///
+/// Notes at the top level are Unfiled; Divider and Subject folders arrive with the library (M3).
 /// Every access is file-coordinated, because iCloud Drive may be updating the same files.
 /// Methods block, so call them off the main thread.
 public struct NotebookFolder: Sendable {
+    public static let noteExtension = "scarnote"
+
     public let root: URL
     /// This device's ID; it only ever writes `.ink` files named after it.
     public let deviceID: UUID
@@ -16,6 +24,12 @@ public struct NotebookFolder: Sendable {
     public init(root: URL, deviceID: UUID) {
         self.root = root
         self.deviceID = deviceID
+    }
+
+    public struct StoredNote: Sendable {
+        /// The note's package.
+        public var url: URL
+        public var record: NoteRecord
     }
 
     public struct LoadedPage: Sendable {
@@ -26,29 +40,38 @@ public struct NotebookFolder: Sendable {
 
     // MARK: - Notes
 
-    public func loadNotes() throws -> [NoteRecord] {
-        try jsonFiles(in: notesIndexDirectory).compactMap { url in
-            try? decodeJSON(NoteRecord.self, from: url)
-        }
+    public func loadNotes() throws -> [StoredNote] {
+        try contents(of: root)
+            .filter { $0.pathExtension == Self.noteExtension }
+            .compactMap { url in
+                guard let record = try? decodeJSON(NoteRecord.self, from: url.appending(path: "Note.json")) else { return nil }
+                return StoredNote(url: url, record: record)
+            }
     }
 
-    public func save(_ note: NoteRecord) throws {
-        try writeJSON(note, to: notesIndexDirectory.appending(path: "\(note.id.uuidString).json"))
+    /// Creates a new note package named after `title`, adding " 2", " 3"… if that name is taken.
+    public func createNote(title: String) throws -> StoredNote {
+        let record = NoteRecord(title: title)
+        let url = availableURL(forTitle: title)
+        try save(record, at: url)
+        return StoredNote(url: url, record: record)
+    }
+
+    public func save(_ record: NoteRecord, at noteURL: URL) throws {
+        try writeJSON(record, to: noteURL.appending(path: "Note.json"))
     }
 
     // MARK: - Pages
 
     /// Loads a note's pages in order, with every device's ink.
-    public func loadPages(ofNote noteID: UUID) throws -> [LoadedPage] {
-        let pagesDirectory = pagesDirectory(noteID)
-        let pageDirectories = (try? subdirectories(of: pagesDirectory)) ?? []
+    public func loadPages(inNoteAt noteURL: URL) throws -> [LoadedPage] {
         var pages: [LoadedPage] = []
-        for directory in pageDirectories {
-            guard let record = try? decodeJSON(PageRecord.self, from: directory.appending(path: "page.json")) else {
+        for directory in try subdirectories(of: pagesDirectory(noteURL)) {
+            guard let record = try? decodeJSON(PageRecord.self, from: directory.appending(path: "Page.json")) else {
                 continue
             }
             var inks: [UUID: DeviceInk] = [:]
-            for file in try files(in: directory, withExtension: "ink") {
+            for file in try contents(of: directory) where file.pathExtension == "ink" {
                 guard let device = UUID(uuidString: file.deletingPathExtension().lastPathComponent) else { continue }
                 do {
                     let data = try coordinatedRead(file) { try Data(contentsOf: $0) }
@@ -66,25 +89,38 @@ public struct NotebookFolder: Sendable {
         return pages.sorted { ($0.record.sortKey, $0.record.id.uuidString) < ($1.record.sortKey, $1.record.id.uuidString) }
     }
 
-    public func save(_ page: PageRecord, inNote noteID: UUID) throws {
-        try writeJSON(page, to: pageDirectory(noteID, page.id).appending(path: "page.json"))
+    public func save(_ page: PageRecord, inNoteAt noteURL: URL) throws {
+        try writeJSON(page, to: pageDirectory(noteURL, page.id).appending(path: "Page.json"))
     }
 
-    public func saveOwnInk(_ ink: DeviceInk, page pageID: UUID, inNote noteID: UUID) throws {
+    public func saveOwnInk(_ ink: DeviceInk, page pageID: UUID, inNoteAt noteURL: URL) throws {
         let data = try InkCodec.encode(ink)
-        try coordinatedWrite(to: pageDirectory(noteID, pageID).appending(path: "\(deviceID.uuidString).ink"), data: data)
+        try coordinatedWrite(to: pageDirectory(noteURL, pageID).appending(path: "\(deviceID.uuidString).ink"), data: data)
     }
 
     // MARK: - Layout
 
-    private var notesIndexDirectory: URL { root.appending(path: "library/notes", directoryHint: .isDirectory) }
-
-    private func pagesDirectory(_ noteID: UUID) -> URL {
-        root.appending(path: "notes/\(noteID.uuidString)/pages", directoryHint: .isDirectory)
+    private func pagesDirectory(_ noteURL: URL) -> URL {
+        noteURL.appending(path: "Pages", directoryHint: .isDirectory)
     }
 
-    private func pageDirectory(_ noteID: UUID, _ pageID: UUID) -> URL {
-        pagesDirectory(noteID).appending(path: pageID.uuidString, directoryHint: .isDirectory)
+    private func pageDirectory(_ noteURL: URL, _ pageID: UUID) -> URL {
+        pagesDirectory(noteURL).appending(path: pageID.uuidString, directoryHint: .isDirectory)
+    }
+
+    private func availableURL(forTitle title: String) -> URL {
+        let cleaned = title
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = cleaned.isEmpty || cleaned.hasPrefix(".") ? "Untitled" : cleaned
+        var candidate = base
+        var number = 2
+        while FileManager.default.fileExists(atPath: root.appending(path: "\(candidate).\(Self.noteExtension)").path(percentEncoded: false)) {
+            candidate = "\(base) \(number)"
+            number += 1
+        }
+        return root.appending(path: "\(candidate).\(Self.noteExtension)", directoryHint: .isDirectory)
     }
 
     // MARK: - Coordinated file access
@@ -142,13 +178,5 @@ public struct NotebookFolder: Sendable {
 
     private func subdirectories(of directory: URL) throws -> [URL] {
         try contents(of: directory).filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-    }
-
-    private func files(in directory: URL, withExtension pathExtension: String) throws -> [URL] {
-        try contents(of: directory).filter { $0.pathExtension == pathExtension }
-    }
-
-    private func jsonFiles(in directory: URL) throws -> [URL] {
-        try files(in: directory, withExtension: "json")
     }
 }

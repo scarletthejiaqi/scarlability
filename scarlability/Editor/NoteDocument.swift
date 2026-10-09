@@ -40,11 +40,20 @@ final class NoteDocument {
         case inkChanged(pageID: UUID, area: CGRect)
     }
 
+    /// A stroke (or one piece of a stroke that crossed onto another page) and its page.
+    struct PlacedStroke {
+        var stroke: Stroke
+        var pageID: UUID
+    }
+
     private enum Edit {
-        case addStroke(Stroke, pageID: UUID)
+        /// One pen stroke, which may have been split across pages.
+        case addStrokes([PlacedStroke])
     }
 
     private(set) var note: NoteRecord
+    /// The note's `.scarnote` package.
+    let noteURL: URL
     private(set) var pages: [Page]
     /// Set when writing to the notes folder fails; cleared by the next successful save.
     private(set) var saveFailed = false
@@ -67,8 +76,9 @@ final class NoteDocument {
     nonisolated private static let ioQueue = DispatchQueue(label: "scarlability.notes-io")
     nonisolated private static let logger = Logger(subsystem: "scarlability", category: "NoteDocument")
 
-    init(note: NoteRecord, loadedPages: [NotebookFolder.LoadedPage], folder: NotebookFolder) {
-        self.note = note
+    init(note: NotebookFolder.StoredNote, loadedPages: [NotebookFolder.LoadedPage], folder: NotebookFolder) {
+        self.note = note.record
+        self.noteURL = note.url
         self.folder = folder
         self.pages = loadedPages.map { loaded in
             var others = loaded.inks
@@ -81,13 +91,10 @@ final class NoteDocument {
     /// Opens the most recently edited note, or creates one. (The real library arrives in M3.)
     static func openTestNote(in folder: NotebookFolder) async throws -> NoteDocument {
         let (note, pages) = try await Task.detached {
-            let notes = try folder.loadNotes().filter { $0.deletedAt == nil }
-            if let latest = notes.max(by: { $0.modifiedAt < $1.modifiedAt }) {
-                return (latest, try folder.loadPages(ofNote: latest.id))
+            if let latest = try folder.loadNotes().max(by: { $0.record.modifiedAt < $1.record.modifiedAt }) {
+                return (latest, try folder.loadPages(inNoteAt: latest.url))
             }
-            let note = NoteRecord(title: "Test Note")
-            try folder.save(note)
-            return (note, [])
+            return (try folder.createNote(title: "Test Note"), [])
         }.value
         return NoteDocument(note: note, loadedPages: pages, folder: folder)
     }
@@ -108,8 +115,10 @@ final class NoteDocument {
         }
     }
 
-    func addStroke(_ stroke: Stroke, toPage pageID: UUID) {
-        let edit = Edit.addStroke(stroke, pageID: pageID)
+    /// Adds one pen stroke: a single piece, or one piece per page if it crossed a page edge.
+    func addStroke(_ pieces: [PlacedStroke]) {
+        guard !pieces.isEmpty else { return }
+        let edit = Edit.addStrokes(pieces)
         apply(edit, reversed: false)
         history.record(edit)
     }
@@ -128,16 +137,18 @@ final class NoteDocument {
 
     private func apply(_ edit: Edit, reversed: Bool) {
         switch edit {
-        case .addStroke(let stroke, let pageID):
-            guard let index = pages.firstIndex(where: { $0.id == pageID }) else { return }
-            if reversed {
-                pages[index].ownInk.strokes.removeAll { $0.id == stroke.id }
-            } else {
-                pages[index].ownInk.strokes.append(stroke)
+        case .addStrokes(let pieces):
+            for piece in pieces {
+                guard let index = pages.firstIndex(where: { $0.id == piece.pageID }) else { continue }
+                if reversed {
+                    pages[index].ownInk.strokes.removeAll { $0.id == piece.stroke.id }
+                } else {
+                    pages[index].ownInk.strokes.append(piece.stroke)
+                }
+                pages[index].refreshVisibleStrokes()
+                inkDidChange(onPageAt: index)
+                onChange?(.inkChanged(pageID: piece.pageID, area: piece.stroke.bounds))
             }
-            pages[index].refreshVisibleStrokes()
-            inkDidChange(onPageAt: index)
-            onChange?(.inkChanged(pageID: pageID, area: stroke.bounds))
         }
         if normalizeTrailingPages() {
             onChange?(.pagesChanged)
@@ -204,23 +215,23 @@ final class NoteDocument {
         inkToSave.removeAll()
 
         let folder = folder
-        let noteID = self.note.id
+        let noteURL = noteURL
         Self.ioQueue.async {
             let failed: Bool
             do {
                 // Page records first, so another device never sees ink for a page it doesn't know.
                 for record in records {
-                    try folder.save(record, inNote: noteID)
+                    try folder.save(record, inNoteAt: noteURL)
                 }
                 for (pageID, ink) in inks {
-                    try folder.saveOwnInk(ink, page: pageID, inNote: noteID)
+                    try folder.saveOwnInk(ink, page: pageID, inNoteAt: noteURL)
                 }
                 if let note {
-                    try folder.save(note)
+                    try folder.save(note, at: noteURL)
                 }
                 failed = false
             } catch {
-                Self.logger.error("Saving note \(noteID) failed: \(error)")
+                Self.logger.error("Saving \(noteURL.lastPathComponent) failed: \(error)")
                 failed = true
             }
             Task { @MainActor [weak self] in

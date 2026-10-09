@@ -1,17 +1,35 @@
 import Foundation
 
-/// Access to the notes folder the user picked. Apps can only reach folders outside their own
-/// container (like one in iCloud Drive) through a security-scoped bookmark, which is saved so
-/// access survives relaunches.
+/// Access to the place the user picked for their notes. Apps can only reach folders outside their
+/// own container (like iCloud Drive) through a security-scoped bookmark, which is saved so access
+/// survives relaunches.
+///
+/// Notes always live in a folder named "Scarlability": the one the user picked if it has that
+/// name, otherwise one created inside it. That keeps notes out of the rest of iCloud Drive.
 final class FolderAccess {
-    let url: URL
+    /// The folder the user picked.
+    let pickedURL: URL
+    /// The Scarlability folder the notes live in.
+    let notesURL: URL
     private var isAccessing: Bool
 
+    static let notesFolderName = "Scarlability"
     private static let bookmarkKey = "notesFolderBookmark"
 
-    private init(url: URL, isAccessing: Bool) {
-        self.url = url
+    private init(pickedURL: URL, isAccessing: Bool) {
+        self.pickedURL = pickedURL
         self.isAccessing = isAccessing
+        notesURL = pickedURL.lastPathComponent == Self.notesFolderName
+            ? pickedURL
+            : pickedURL.appending(path: Self.notesFolderName, directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: notesURL, withIntermediateDirectories: true)
+    }
+
+    /// Where the notes are, as the user would say it, e.g. "iCloud Drive › Scarlability".
+    var displayName: String {
+        guard notesURL != pickedURL else { return Self.notesFolderName }
+        let picked = (try? pickedURL.resourceValues(forKeys: [.localizedNameKey]).localizedName) ?? pickedURL.lastPathComponent
+        return "\(picked) › \(Self.notesFolderName)"
     }
 
     /// Saves access to a folder the user just picked.
@@ -24,7 +42,7 @@ final class FolderAccess {
             if isAccessing { url.stopAccessingSecurityScopedResource() }
             throw error
         }
-        return FolderAccess(url: url, isAccessing: isAccessing)
+        return FolderAccess(pickedURL: url, isAccessing: isAccessing)
     }
 
     /// Reopens the folder picked on an earlier launch, if there is one.
@@ -33,7 +51,7 @@ final class FolderAccess {
         // For testing without the folder picker (e.g. in the Simulator): use a folder inside the app.
         if ProcessInfo.processInfo.arguments.contains("-UseLocalNotesFolder"),
            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-            return FolderAccess(url: documents.appending(path: "Scarlability", directoryHint: .isDirectory), isAccessing: false)
+            return FolderAccess(pickedURL: documents, isAccessing: false)
         }
         #endif
         guard let bookmark = UserDefaults.standard.data(forKey: bookmarkKey) else { return nil }
@@ -45,7 +63,7 @@ final class FolderAccess {
         if isStale, let fresh = try? url.bookmarkData(options: creationOptions, includingResourceValuesForKeys: nil, relativeTo: nil) {
             UserDefaults.standard.set(fresh, forKey: bookmarkKey)
         }
-        return FolderAccess(url: url, isAccessing: isAccessing)
+        return FolderAccess(pickedURL: url, isAccessing: isAccessing)
     }
 
     static func forget() {
@@ -54,7 +72,7 @@ final class FolderAccess {
 
     func stop() {
         guard isAccessing else { return }
-        url.stopAccessingSecurityScopedResource()
+        pickedURL.stopAccessingSecurityScopedResource()
         isAccessing = false
     }
 

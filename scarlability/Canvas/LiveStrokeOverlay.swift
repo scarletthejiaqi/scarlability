@@ -1,99 +1,148 @@
 #if os(iOS)
+import QuartzCore
 import ScarlabilityKit
 import UIKit
 
-/// Draws the stroke being written, on top of the pages and at screen resolution.
+/// The stroke being written, plus just-finished strokes waiting for the page tiles to show them.
 ///
-/// It covers the visible area rather than living inside the zoomed content, so the live stroke is
-/// sharp at any zoom without a huge backing image. When a stroke finishes, the page's tiles redraw
-/// in the background; the overlay keeps showing the stroke briefly until they've caught up, so it
-/// never flickers out.
-final class LiveStrokeOverlay: UIView {
-    private struct Item {
-        var path: CGPath
-        var color: CGColor
-        weak var pageView: UIView?
+/// Strokes are drawn inside the zoomed content, on top of the pages, at the same resolution and
+/// on the same pixel grid as the tiles. When the tiles have redrawn a finished stroke, its copy
+/// here fades out over a moment instead of disappearing at once, which hides the tiny difference
+/// in how the screen places tiles, so nothing visibly changes when the pen lifts.
+final class LiveInk {
+    /// Where ink may appear (all the pages), in content coordinates. Writing can run from one
+    /// page onto the next, so this isn't just the page the stroke started on.
+    var writingArea: CGRect = .infinite {
+        didSet { live.writingArea = writingArea }
     }
 
-    private var live: Item?
-    private var liveRect: CGRect = .null
-    private var handoffs: [UUID: Item] = [:]
+    /// Pixels per content point; set to what the page tiles use at the current zoom.
+    var rasterScale: CGFloat = 2 {
+        didSet { live.rasterScale = rasterScale }
+    }
 
-    private static let handoffDuration: TimeInterval = 0.35
+    private let host: CALayer
+    private let live = StrokeInkLayer()
+    private var handoffs: [UUID: StrokeInkLayer] = [:]
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
+    /// If the pages somehow never report back, stop showing a handed-off stroke after this long.
+    private static let handoffTimeout: TimeInterval = 0.6
+    private static let fadeDuration: CFTimeInterval = 0.12
+
+    init(host: CALayer) {
+        self.host = host
+        host.addSublayer(live)
+    }
+
+    func showLiveStroke(_ points: [InkPoint], color: InkColor, pageOrigin: CGPoint) {
+        live.show(StrokeGeometry.path(for: points), color: color.cgColor, pageOrigin: pageOrigin, growing: true)
+    }
+
+    func clearLiveStroke() {
+        live.clear()
+    }
+
+    /// Replaces the live stroke with its finished shape, shown until `endHandOff(id)`.
+    func handOff(id: UUID, path: CGPath, color: InkColor, pageOrigin: CGPoint) {
+        let layer = StrokeInkLayer()
+        layer.writingArea = writingArea
+        layer.rasterScale = rasterScale
+        layer.show(path, color: color.cgColor, pageOrigin: pageOrigin, growing: false)
+        host.addSublayer(layer)
+        handoffs[id] = layer
+        live.clear()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.handoffTimeout) { [weak self] in
+            self?.endHandOff(id)
+        }
+    }
+
+    func endHandOff(_ id: UUID) {
+        guard let layer = handoffs.removeValue(forKey: id) else { return }
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { layer.removeFromSuperlayer() }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        fade.duration = Self.fadeDuration
+        layer.opacity = 0
+        layer.add(fade, forKey: "fade")
+        CATransaction.commit()
+    }
+}
+
+/// One stroke, rasterized like the page tiles.
+private final class StrokeInkLayer: CALayer {
+    var writingArea: CGRect = .infinite
+    var rasterScale: CGFloat = 2
+
+    private var path: CGPath?
+    private var color: CGColor?
+    /// Origin of the page whose coordinates the path is in, in content coordinates. The pixel
+    /// grid is anchored there, like that page's tiles.
+    private var pageOrigin: CGPoint = .zero
+
+    override init() {
+        super.init()
+        zPosition = 10
         isOpaque = false
-        backgroundColor = .clear
-        isUserInteractionEnabled = false
-        contentMode = .redraw
+    }
+
+    override init(layer: Any) {
+        super.init(layer: layer)
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
     }
 
-    func showLiveStroke(_ points: [InkPoint], color: InkColor, on pageView: UIView) {
-        let item = Item(path: StrokeGeometry.path(for: points), color: color.cgColor, pageView: pageView)
-        live = item
-        let rect = screenRect(of: item)
-        setNeedsDisplay(rect.union(liveRect).insetBy(dx: -4, dy: -4))
-        liveRect = rect
-    }
+    // Moving and resizing must be instant, not animated.
+    override func action(forKey event: String) -> CAAction? { NSNull() }
 
-    func clearLiveStroke() {
-        if !liveRect.isNull {
-            setNeedsDisplay(liveRect.insetBy(dx: -4, dy: -4))
+    /// - Parameter growing: Keep the layer at least as big as before. While a stroke grows, that
+    ///   saves reallocating the backing image on every frame.
+    func show(_ path: CGPath, color: CGColor, pageOrigin: CGPoint, growing: Bool) {
+        self.path = path
+        self.color = color
+        self.pageOrigin = pageOrigin
+
+        var area = path.boundingBoxOfPath
+            .offsetBy(dx: pageOrigin.x, dy: pageOrigin.y)
+            .insetBy(dx: -2, dy: -2)
+            .intersection(writingArea)
+        guard !area.isNull, !area.isEmpty else {
+            clear()
+            return
         }
-        live = nil
-        liveRect = .null
-    }
-
-    /// Takes over the finished stroke from the live stroke until the page tiles show it.
-    func handOff(_ rendered: RenderedStroke, on pageView: UIView) {
-        let id = rendered.stroke.id
-        let item = Item(path: rendered.path, color: rendered.stroke.color.cgColor, pageView: pageView)
-        handoffs[id] = item
-        clearLiveStroke()
-        setNeedsDisplay(screenRect(of: item).insetBy(dx: -4, dy: -4))
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.handoffDuration) { [weak self] in
-            guard let self, let item = self.handoffs.removeValue(forKey: id) else { return }
-            self.setNeedsDisplay(self.screenRect(of: item).insetBy(dx: -4, dy: -4))
+        if growing, !isHidden, !frame.isEmpty {
+            area = area.union(frame)
         }
-    }
+        let scale = rasterScale
+        func snapDown(_ value: CGFloat, _ origin: CGFloat) -> CGFloat { origin + floor((value - origin) * scale) / scale }
+        func snapUp(_ value: CGFloat, _ origin: CGFloat) -> CGFloat { origin + ceil((value - origin) * scale) / scale }
+        let minX = snapDown(area.minX, pageOrigin.x), minY = snapDown(area.minY, pageOrigin.y)
+        let maxX = snapUp(area.maxX, pageOrigin.x), maxY = snapUp(area.maxY, pageOrigin.y)
 
-    /// Call when the canvas scrolls or zooms, since the strokes move on screen.
-    func viewportDidChange() {
-        guard live != nil || !handoffs.isEmpty else { return }
-        liveRect = live.map(screenRect(of:)) ?? .null
+        contentsScale = scale
+        frame = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        isHidden = false
         setNeedsDisplay()
     }
 
-    override func draw(_ rect: CGRect) {
-        guard let context = UIGraphicsGetCurrentContext() else { return }
-        for item in Array(handoffs.values) + [live].compactMap({ $0 }) {
-            guard let pageView = item.pageView else { continue }
-            context.saveGState()
-            context.clip(to: pageView.convert(pageView.bounds, to: self))
-            context.concatenate(pageTransform(pageView))
-            context.setFillColor(item.color)
-            context.addPath(item.path)
-            context.fillPath(using: .winding)
-            context.restoreGState()
-        }
+    func clear() {
+        path = nil
+        isHidden = true
+        frame = .zero
     }
 
-    /// Maps page coordinates to overlay coordinates (the canvas only scales and moves pages).
-    private func pageTransform(_ pageView: UIView) -> CGAffineTransform {
-        let origin = pageView.convert(CGPoint.zero, to: self)
-        let unit = pageView.convert(CGPoint(x: 1, y: 0), to: self)
-        let scale = unit.x - origin.x
-        return CGAffineTransform(a: scale, b: 0, c: 0, d: scale, tx: origin.x, ty: origin.y)
-    }
-
-    private func screenRect(of item: Item) -> CGRect {
-        guard let pageView = item.pageView else { return .null }
-        return item.path.boundingBoxOfPath.applying(pageTransform(pageView))
+    override func draw(in context: CGContext) {
+        guard let path, let color else { return }
+        // Work in content coordinates, then in the stroke's page coordinates.
+        context.translateBy(x: -frame.minX, y: -frame.minY)
+        context.clip(to: writingArea)
+        context.translateBy(x: pageOrigin.x, y: pageOrigin.y)
+        context.setFillColor(color)
+        context.addPath(path)
+        context.fillPath(using: .winding)
     }
 }
 #endif

@@ -8,15 +8,28 @@ public final class PageTileLayer: CATiledLayer {
         public var paper: PaperStyle
         public var size: CGSize
         public var strokes: [RenderedStroke]
+        /// A thin line along the bottom edge, separating this page from the next one on screen.
+        public var bottomEdgeColor: InkColor?
 
-        public init(paper: PaperStyle, size: CGSize, strokes: [RenderedStroke]) {
+        public init(paper: PaperStyle, size: CGSize, strokes: [RenderedStroke], bottomEdgeColor: InkColor? = nil) {
             self.paper = paper
             self.size = size
             self.strokes = strokes
+            self.bottomEdgeColor = bottomEdgeColor
         }
     }
 
-    private let content = Mutex<Content?>(nil)
+    /// Called (on a background thread) after each tile is drawn, with the tile's rect in page
+    /// coordinates and the content version it showed.
+    public typealias TileDrawnHandler = @Sendable (_ rect: CGRect, _ version: Int) -> Void
+
+    private struct State {
+        var content: Content?
+        var version = 0
+        var onTileDrawn: TileDrawnHandler?
+    }
+
+    private let state = Mutex(State())
 
     // New tiles appear instantly instead of fading in.
     override public class func fadeDuration() -> CFTimeInterval { 0 }
@@ -32,7 +45,8 @@ public final class PageTileLayer: CATiledLayer {
     override public init(layer: Any) {
         super.init(layer: layer)
         if let other = layer as? PageTileLayer {
-            content.withLock { $0 = other.content.withLock { $0 } }
+            let copied = other.state.withLock { $0 }
+            state.withLock { $0 = copied }
         }
     }
 
@@ -40,9 +54,19 @@ public final class PageTileLayer: CATiledLayer {
         fatalError("init(coder:) is not supported")
     }
 
+    /// The version of the latest content; tiles report which version they drew.
+    public var contentVersion: Int { state.withLock { $0.version } }
+
+    public func setTileDrawnHandler(_ handler: @escaping TileDrawnHandler) {
+        state.withLock { $0.onTileDrawn = handler }
+    }
+
     /// Replaces what the page shows. Pass the changed area to redraw only those tiles.
     public func setContent(_ newContent: Content, changedRect: CGRect? = nil) {
-        content.withLock { $0 = newContent }
+        state.withLock {
+            $0.content = newContent
+            $0.version += 1
+        }
         if let changedRect {
             setNeedsDisplay(changedRect.insetBy(dx: -2, dy: -2))
         } else {
@@ -51,7 +75,8 @@ public final class PageTileLayer: CATiledLayer {
     }
 
     override public func draw(in context: CGContext) {
-        guard let content = content.withLock({ $0 }) else { return }
+        let (content, version, onTileDrawn) = state.withLock { ($0.content, $0.version, $0.onTileDrawn) }
+        guard let content else { return }
         let clip = context.boundingBoxOfClipPath
         #if os(macOS)
         // AppKit layers have their origin at the bottom-left; page coordinates start at the top-left.
@@ -62,6 +87,12 @@ public final class PageTileLayer: CATiledLayer {
         let pageClip = clip
         #endif
         PaperRenderer.draw(content.paper, pageSize: content.size, in: context, clip: pageClip)
+        if let edge = content.bottomEdgeColor {
+            // Under the ink, so writing that crosses onto the next page covers it.
+            context.setFillColor(edge.cgColor)
+            context.fill(CGRect(x: 0, y: content.size.height - 0.75, width: content.size.width, height: 0.75))
+        }
         InkRenderer.draw(content.strokes, in: context, clip: pageClip)
+        onTileDrawn?(pageClip, version)
     }
 }

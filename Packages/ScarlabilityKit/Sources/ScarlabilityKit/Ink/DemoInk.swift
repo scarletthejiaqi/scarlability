@@ -5,12 +5,15 @@ import Foundation
 /// does (~240 samples per second with changing pressure), so the output goes through the same
 /// smoothing and pressure curve as real writing.
 public enum DemoInk {
+    /// Position smoothing used for demo strokes: the app's default at the normal (page fits width) zoom on an 11" iPad.
+    public static let smoothing = StrokeSmoothing.screenRadius / 1.316
+
     public static func strokes(color: InkColor = .black, baseWidth: Double = 2.2, curve: PressureCurve = PressureCurve()) -> [Stroke] {
         var strokes: [Stroke] = []
         let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
 
         func add(_ samples: [(CGPoint, Double)], color: InkColor = color, width: Double = baseWidth) {
-            var builder = StrokeBuilder(baseWidth: width, curve: curve)
+            var builder = StrokeBuilder(baseWidth: width, curve: curve, smoothing: smoothing)
             for (location, force) in samples {
                 builder.add(location, force: force)
             }
@@ -58,6 +61,20 @@ public enum DemoInk {
         return strokes
     }
 
+    /// Slow cursive loops with the small position and pressure wobble of real Pencil input
+    /// (deterministic, so tests can compare runs). Returns raw samples.
+    public static func shakyHandwritingSamples(origin: CGPoint = CGPoint(x: 60, y: 560)) -> [(CGPoint, Double)] {
+        var random = SeededRandom(seed: 42)
+        // ~120 points per second of pen travel at 240 samples per second: slow, careful writing.
+        return sample(count: 1200) { t in
+            let x = origin.x + t * 300 + 14 * sin(t * .pi * 16)
+            let y = origin.y - 18 * cos(t * .pi * 16) + 18
+            let jitter = CGPoint(x: random.gaussian() * 0.12, y: random.gaussian() * 0.12)
+            let force = 0.3 + 0.1 * sin(t * .pi * 5) + random.gaussian() * 0.02
+            return (CGPoint(x: x + jitter.x, y: y + jitter.y), force)
+        }
+    }
+
     private static func sample(count: Int, _ f: (Double) -> (CGPoint, Double)) -> [(CGPoint, Double)] {
         (0..<count).map { f(Double($0) / Double(max(count - 1, 1))) }
     }
@@ -72,5 +89,29 @@ public enum DemoInk {
         }
         if let last = corners.last { samples.append((last, force)) }
         return samples
+    }
+}
+
+/// A small deterministic random number generator (SplitMix64).
+struct SeededRandom {
+    private var state: UInt64
+
+    init(seed: UInt64) {
+        state = seed
+    }
+
+    mutating func next() -> Double {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        z ^= z >> 31
+        return Double(z >> 11) / Double(1 << 53)
+    }
+
+    /// Standard normal, via Box–Muller.
+    mutating func gaussian() -> Double {
+        let u1 = max(next(), 1e-12), u2 = next()
+        return (-2 * log(u1)).squareRoot() * cos(2 * .pi * u2)
     }
 }

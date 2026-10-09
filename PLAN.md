@@ -1,4 +1,4 @@
-# Scarlability — Build Plan (v4: M1 built, waiting for your test)
+# Scarlability — Build Plan (v5: M1 rebuilt after your first test)
 
 A note-taking app for **iPad + Mac** that copies the *basic* parts of Notability:
 1. Notability-style tools: pressure pen, highlighter, eraser, text, selection, shape snap
@@ -53,7 +53,7 @@ A note-taking app for **iPad + Mac** that copies the *basic* parts of Notability
 - Multi-select notes, e.g. to export them together.
 
 ### 1.4 Sync (iCloud Drive folder, free) ✅
-- Notes are saved as files in a folder you choose in iCloud Drive, e.g. `iCloud Drive/Scarlability`, and iCloud Drive copies them between devices.
+- Notes are saved in `iCloud Drive/Scarlability`, one item per note (see §4), and iCloud Drive copies them between devices.
 - **Setup:** the first time you open the app on each device, it asks you to pick that folder.
 - **Timing:** Apple decides when to sync, usually seconds to a few minutes. The app re-checks the folder while it's open.
 - **Edits on both devices:** each device writes only its own files, and the app combines them, so writing on both devices never loses work.
@@ -111,21 +111,21 @@ scarlability/
 
 ---
 
-## 4. Folder layout (sync-ready from day one)
+## 4. Folder layout ✅ (changed after your first test)
 
+The Files app (and Finder) mirrors the app. Each note is **one item named after the note**: a `.scarnote` package, which is a folder that Files shows as a single file.
 ```
-iCloud Drive/Scarlability/
-├── library/
-│   ├── dividers/<id>.json         { name, sortIndex, isCollapsed, modifiedAt }
-│   ├── subjects/<id>.json         { name, color, dividerID?, sortIndex, modifiedAt }
-│   └── notes/<id>.json            { title, subjectID?, createdAt, modifiedAt, deletedAt? }
-└── notes/<noteID>/
-    ├── pdfs/<pdfID>.pdf           imported PDFs (never modified)
-    ├── images/<imageID>.jpg|png   inserted images
-    └── pages/<pageID>/
-        ├── page.json              { sortKey, background: paper template | PDF page }
-        ├── <iPad-deviceID>.ink    everything the iPad added/changed/deleted on this page
-        └── <Mac-deviceID>.ink     everything the Mac added/changed/deleted on this page
+iCloud Drive/Scarlability/          ← made inside the place you pick
+├── Spring 2026/                    ← Divider            (M3)
+│   └── Biology/                    ← Subject            (M3)
+│       └── Lecture 1.scarnote      ← a note
+└── Test Note.scarnote              ← an Unfiled note    (M1)
+    ├── Note.json                   { title, created, modified, default paper/size }
+    ├── PDFs/, Images/              imported files       (M4/M5)
+    └── Pages/<pageID>/
+        ├── Page.json               { sortKey, size, paper }
+        ├── <iPad-deviceID>.ink     what the iPad wrote/erased on this page
+        └── <Mac-deviceID>.ink      what the Mac wrote/erased on this page
 ```
 **How merging works:**
 - Every object has a unique ID.
@@ -199,6 +199,8 @@ iCloud Drive/Scarlability/
 - M1 pressure: tuned, plus a sensitivity slider in Settings. Undo: 2-finger tap undoes, 3-finger tap redoes.
 - M1 paper: A4, white lined. New pages are added automatically. M1 opens straight into one test note.
 
+- After the first iPad test: lines must be smooth, not "small straight lines" (new smoothing). Pages connect, and writing continues onto the next page. Zoom locks at "page width fills the screen" and "whole page fits". Undo/redo fixed. One item per note in Files, with folders mirroring Dividers/Subjects. Old test files deleted.
+
 **Questions from building M1 (I picked a default for each; tell me what to change)**
 1. **Pressure feel:** at the default sensitivity, the line goes from about 0.65× (light) to 1.35× (firm) of the pen size. Is that too subtle or too strong compared to Notability?
 2. **Smoothing:** shaky lines are smoothed slightly, so very sharp corners get a little rounded. Does writing feel laggy, too wobbly, or about right?
@@ -210,6 +212,8 @@ iCloud Drive/Scarlability/
 8. **Settings location:** the "⋯" button in the title row holds the pressure slider, "Draw with finger", and the notes folder. OK?
 9. **Undo taps vs. palm:** two/three-finger taps are ignored for 0.6 s after the Pencil was used, and for big (palm-sized) touches, so a resting palm doesn't undo. Tell me if undo taps get missed or fire by accident.
 10. **Color picker:** it's Apple's standard picker (spectrum / grid / sliders + eyedropper). Do you want a round color wheel instead?
+11. **Zoom lock strength:** you have to pinch about 7% past a lock to leave it. Too sticky, or not sticky enough?
+12. **Smoothing strength:** is the new smoothing too much (letters look rounded) or too little (still bumpy)?
 
 **Asked when we reach that milestone**
 - M1: which preset colors and sizes, and how many of each? Pressure sensitivity slider in Settings, or one fixed Notability-like feel?
@@ -232,16 +236,13 @@ iCloud Drive/Scarlability/
 5. Press **Run (⌘R)** in Xcode. If the iPad says "Untrusted Developer", go to **Settings → General → VPN & Device Management**, tap your Apple ID, and tap **Trust**. Then press Run again.
 6. In the app, tap **Choose Folder…**, go to **iCloud Drive**, create a new folder named **Scarlability**, and open it.
 
-**What to try**
-- [ ] Write with the Pencil. Does it feel like Notability? Pressing harder should make the line thicker.
-- [ ] Scroll with one finger and pinch to zoom. Zoom in and write: is the ink still sharp?
-- [ ] Rest your palm on the screen while writing. It should neither scroll the page nor leave marks.
-- [ ] Tap black, blue, and red. Tap the selected color again to open the picker; try the eyedropper. Tap the rainbow **+** to add an extra color.
-- [ ] Tap a size dot. Tap the selected size again to get its thickness slider.
-- [ ] Open **⋯ → Pressure sensitivity**, move the slider, and write again. Also try **Draw with finger**.
-- [ ] Undo and redo with the buttons, and with a two-finger tap (undo) and a three-finger tap (redo).
-- [ ] Write on the last page: a new blank page should appear below it.
-- [ ] Swipe the app closed, reopen it, and check that your writing is still there.
-- [ ] In the Files app, open **iCloud Drive → Scarlability**. You should see `library/` and `notes/` folders.
+**What to try (rebuilt version)**
+- [ ] **Smoothness:** write slowly and quickly. Is the line one smooth curve now, instead of small straight pieces?
+- [ ] **No flash:** watch the line as you lift the Pencil. It should not change at all.
+- [ ] **Across pages:** write across the line between two pages. The writing should continue onto the next page.
+- [ ] **Zoom lock:** pinch slowly. The page should stick when its width fills the screen and when the whole page fits, then move on if you keep pinching.
+- [ ] **Undo/redo:** two-finger tap undoes, three-finger tap redoes, and the arrow buttons work too.
+- [ ] **Files app → iCloud Drive → Scarlability:** "Test Note" should be **one item**, not folders.
+- [ ] Still working from last time: pressure, colors and picker, sizes and slider, palm resting, Draw with finger, new blank page at the end, writing is still there after closing and reopening the app.
 
 Then answer the questions in §9. I'll tune the pen, and once you approve M1, I'll merge it into `main` and start M2.

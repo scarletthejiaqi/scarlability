@@ -15,7 +15,7 @@ struct FolderSetupView: View {
                 .foregroundStyle(.tint)
             Text("Where should your notes live?")
                 .font(.title2.bold())
-            Text("Choose a folder in iCloud Drive, for example a new folder named “Scarlability”. Your notes are saved there, and iCloud Drive keeps them in sync with your Mac. Pick the same folder on every device.")
+            Text("Choose iCloud Drive (or any folder in it). The app keeps your notes in a folder named “Scarlability” there, one item per note, and iCloud Drive keeps them in sync with your Mac. Choose the same place on every device.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 460)

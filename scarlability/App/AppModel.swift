@@ -14,7 +14,7 @@ final class AppModel {
 
     private(set) var state: State = .needsFolder
     let penSettings = PenSettings()
-    var folderName: String? { folderAccess?.url.lastPathComponent }
+    var folderName: String? { folderAccess?.displayName }
 
     private var folderAccess: FolderAccess?
 
@@ -47,7 +47,7 @@ final class AppModel {
         folderAccess?.stop()
         folderAccess = access
         state = .loading
-        let folder = NotebookFolder(root: access.url, deviceID: DeviceIdentity.id)
+        let folder = NotebookFolder(root: access.notesURL, deviceID: DeviceIdentity.id)
         Task {
             do {
                 let document = try await NoteDocument.openTestNote(in: folder)
