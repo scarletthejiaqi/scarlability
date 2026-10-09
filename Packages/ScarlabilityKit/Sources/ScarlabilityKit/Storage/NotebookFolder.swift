@@ -38,6 +38,8 @@ public struct NotebookFolder: Sendable {
         public var record: PageRecord
         /// Each device's ink for this page, keyed by device ID.
         public var inks: [UUID: DeviceInk]
+        /// Each device's text boxes and images for this page, keyed by device ID.
+        public var items: [UUID: DeviceItems] = [:]
     }
 
     // MARK: - Notes
@@ -79,6 +81,15 @@ public struct NotebookFolder: Sendable {
                 continue
             }
             var inks: [UUID: DeviceInk] = [:]
+            var items: [UUID: DeviceItems] = [:]
+            for file in try contents(of: directory) where file.lastPathComponent.hasSuffix(".items.json") {
+                guard let device = UUID(uuidString: String(file.lastPathComponent.dropLast(".items.json".count))) else { continue }
+                do {
+                    items[device] = try decodeJSON(DeviceItems.self, from: file)
+                } catch where device != deviceID {
+                    continue
+                }
+            }
             for file in try contents(of: directory) where file.pathExtension == "ink" {
                 guard let device = UUID(uuidString: file.deletingPathExtension().lastPathComponent) else { continue }
                 do {
@@ -92,7 +103,7 @@ public struct NotebookFolder: Sendable {
                     continue
                 }
             }
-            pages.append(LoadedPage(record: record, inks: inks))
+            pages.append(LoadedPage(record: record, inks: inks, items: items))
         }
         return pages.sorted { ($0.record.sortKey, $0.record.id.uuidString) < ($1.record.sortKey, $1.record.id.uuidString) }
     }
@@ -104,6 +115,22 @@ public struct NotebookFolder: Sendable {
     public func saveOwnInk(_ ink: DeviceInk, page pageID: UUID, inNoteAt noteURL: URL) throws {
         let data = try InkCodec.encode(ink)
         try coordinatedWrite(to: pageDirectory(noteURL, pageID).appending(path: "\(deviceID.uuidString).ink"), data: data)
+    }
+
+    public func saveOwnItems(_ items: DeviceItems, page pageID: UUID, inNoteAt noteURL: URL) throws {
+        try writeJSON(items, to: pageDirectory(noteURL, pageID).appending(path: "\(deviceID.uuidString).items.json"))
+    }
+
+    // MARK: - Images
+
+    /// Saves an image into the note package's Images folder.
+    public func saveImage(_ data: Data, named fileName: String, inNoteAt noteURL: URL) throws {
+        try coordinatedWrite(to: noteURL.appending(path: "Images/\(fileName)"), data: data)
+    }
+
+    public func loadImageData(named fileName: String, inNoteAt noteURL: URL) -> Data? {
+        let url = noteURL.appending(path: "Images/\(fileName)")
+        return try? coordinatedRead(url) { try Data(contentsOf: $0) }
     }
 
     // MARK: - Layout

@@ -7,6 +7,7 @@ enum Tool: String, Codable, CaseIterable {
     case highlighter
     case eraser
     case select
+    case text
 }
 
 enum EraserMode: String, Codable {
@@ -52,6 +53,8 @@ struct ToolPresets: Codable, Equatable {
 
     static let pen = ToolPresets(colors: [.black, .blue, .red], selectedColorSlot: 0, sizes: [1.4, 2.2, 3.4], selectedSizeSlot: 1)
     static let highlighter = ToolPresets(colors: [InkColor(hex: 0xFFE14D)], selectedColorSlot: 0, sizes: [10, 16, 24], selectedSizeSlot: 1)
+    /// Text colors; the sizes aren't used (text has its own size setting).
+    static let text = ToolPresets(colors: [.black, .blue, .red], selectedColorSlot: 0, sizes: [14, 17, 22], selectedSizeSlot: 1)
 }
 
 /// Which tool is active and each tool's settings, saved on this device.
@@ -79,6 +82,9 @@ final class ToolSettings {
     var eraserSizes: [Double] { didSet { save() } }
     var selectedEraserSize: Int { didSet { save() } }
     var selectMode: SelectMode { didSet { save() } }
+    var text: ToolPresets { didSet { save() } }
+    var textFont: TextFont { didSet { save() } }
+    var textSize: Double { didSet { save() } }
     var pressureSensitivity: Double { didSet { save() } }
     var drawsWithFinger: Bool { didSet { save() } }
 
@@ -109,11 +115,19 @@ final class ToolSettings {
         eraserSizes = stored.eraserSizes
         selectedEraserSize = stored.selectedEraserSize
         selectMode = stored.selectMode
+        text = stored.text ?? .text
+        textFont = stored.textFont ?? .system
+        textSize = stored.textSize ?? 17
         pressureSensitivity = stored.pressureSensitivity
         drawsWithFinger = stored.drawsWithFinger
     }
 
     var pressureCurve: PressureCurve { PressureCurve(sensitivity: pressureSensitivity) }
+
+    /// The style new text boxes start with.
+    var textStyle: TextRun { TextRun(text: "", font: textFont, size: textSize, color: text.currentColor) }
+
+    static let textSizes: [Double] = [10, 12, 14, 17, 20, 24, 28, 36, 48]
     var eraserRadius: Double { eraserSizes[min(selectedEraserSize, eraserSizes.count - 1)] }
 
     private struct Stored: Codable {
@@ -126,6 +140,10 @@ final class ToolSettings {
         var eraserSizes: [Double]
         var selectedEraserSize: Int
         var selectMode: SelectMode
+        // Added in M4; optional so settings saved before still load.
+        var text: ToolPresets?
+        var textFont: TextFont?
+        var textSize: Double?
         var pressureSensitivity: Double
         var drawsWithFinger: Bool
 
@@ -139,12 +157,15 @@ final class ToolSettings {
             eraserSizes: [4, 9, 18],
             selectedEraserSize: 1,
             selectMode: .freeform,
+            text: .text,
+            textFont: .system,
+            textSize: 17,
             pressureSensitivity: PressureCurve.defaultSensitivity,
             drawsWithFinger: false
         )
 
         func validated() -> Stored? {
-            guard pen.isValid, highlighter.isValid,
+            guard pen.isValid, highlighter.isValid, text?.isValid ?? true,
                   eraserSizes.count == ToolSettings.sizeCount, eraserSizes.indices.contains(selectedEraserSize) else { return nil }
             return self
         }
@@ -171,6 +192,9 @@ final class ToolSettings {
             eraserSizes: eraserSizes,
             selectedEraserSize: selectedEraserSize,
             selectMode: selectMode,
+            text: text,
+            textFont: textFont,
+            textSize: textSize,
             pressureSensitivity: pressureSensitivity,
             drawsWithFinger: drawsWithFinger
         )

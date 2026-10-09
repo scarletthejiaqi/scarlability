@@ -97,7 +97,32 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] Restoring puts a note back in its subject (or in Unfiled if that subject is gone).
 - [ ] **Files app → iCloud Drive → Scarlability** has a folder per divider, a folder per subject inside it, each note as one item, and a "Recently Deleted" folder.
 
-## 12. Questions to answer while testing
+## 12. Text (M4)
+- [ ] Tap **Text** in the toolbar, then tap the page. A text box starts there and the keyboard opens.
+- [ ] Type. The box grows wider as you type, then wraps at the page edge.
+- [ ] Drag the **blue handle** on the box's right edge to set its width.
+- [ ] While typing, the box stays above the keyboard.
+- [ ] **Font** menu (System, Serif, Rounded, Monospaced, Handwritten, Marker) and **size** menu (17 pt by default).
+- [ ] **Colors:** 3 presets plus the rainbow **+**. Tap the selected color again for the picker and eyedropper.
+- [ ] **B / I / U**: select some words and tap, or tap first and then type.
+- [ ] **Bullets** and **numbers** (list buttons). Return continues the list; Return on an empty item ends it.
+- [ ] Tap outside the box to finish. The text sits **under** your handwriting, so you can write and highlight over it.
+- [ ] Tap an existing box with the Text tool to edit it again. Deleting all its text removes the box.
+- [ ] With **Select**: tap a text box to select it, then move, resize (the text scales), rotate, recolor, **Edit Text**, Delete.
+- [ ] Copy text in another app, then **Image ▸ Paste** (or tap an empty spot with Select ▸ Paste). It becomes a text box.
+
+## 13. Images (M4)
+- [ ] **Image ▸ Photos**: pick one or more photos. They appear in the middle of the screen, about half a page wide, already selected.
+- [ ] **Image ▸ Take Photo** (allow camera access the first time) and **Image ▸ Files** work.
+- [ ] Copy a picture in another app, then **Image ▸ Paste**.
+- [ ] Move, resize and rotate a picture with the Select tool.
+- [ ] **Crop**: select a picture, choose **Crop**, drag its edges or corners in, then **Done** (or **Cancel**).
+- [ ] Pictures sit **under** handwriting: write and highlight on top of them.
+- [ ] **Image ▸ Scan Document**: scan 1–2 pages. They become **new pages** after the page on screen, and you can write on them.
+- [ ] Undo removes an inserted picture, a crop or a text change.
+- [ ] Close and reopen the note: text and pictures are still there, and the library thumbnail shows them.
+
+## 14. Questions to answer while testing
 1. **Pressure feel:** too subtle, too strong, or right compared to Notability?
 2. **Smoothing:** too much (letters look rounded), too little (still bumpy), or right?
 3. **Pen sizes:** thin 1.4 / medium 2.2 / thick 3.4. Do they match what you use?
@@ -126,6 +151,14 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 22. **Search** only looks at titles (searching handwriting isn't in v1). Fine for now?
 23. **Changes from your other device** show up when you come back to the library or reopen the app. Instant updates come with sync in M7. OK until then?
 
+**From M4** (I picked a default for each):
+24. **Text box outline:** a blue outline shows only while typing; finished text has no border. OK?
+25. **Scanned pages** can't be undone or deleted yet (there's no "Delete Page" so far). Want a Delete Page option?
+26. **Pictures** are saved at up to 2400 pixels (JPEG, or PNG if the original was PNG) to save iCloud space. Sharp enough?
+27. **Zooming while typing** finishes the text box first, to keep the text sharp. OK?
+28. **Text and lines:** 17 pt text doesn't line up exactly with the lined paper. Should text snap to the lines?
+29. **Rotated text boxes** can be edited, but their width handle is hidden. Fine?
+
 ---
 
-*New sections are added here as each part is built (next: M4, text and images).*
+*New sections are added here as each part is built (next: M5, PDF import and export).*

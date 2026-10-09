@@ -16,22 +16,33 @@ final class NoteDocument {
         var ownInk: DeviceInk
         /// Ink from other devices, read from their files.
         var otherInks: [UUID: DeviceInk]
+        /// This device's versions of text boxes and images on the page, and its deletions.
+        var ownItems = DeviceItems()
+        var otherItems: [UUID: DeviceItems] = [:]
         /// False for the blank last page until someone writes on it.
         var isSaved: Bool
         private(set) var visibleStrokes: [Stroke] = []
+        private(set) var visibleItems: [PageItem] = []
 
         var id: UUID { record.id }
 
-        init(record: PageRecord, ownInk: DeviceInk, otherInks: [UUID: DeviceInk], isSaved: Bool) {
+        /// Nothing on it: no ink, text, images or scanned background.
+        var isBlank: Bool { visibleStrokes.isEmpty && visibleItems.isEmpty && record.background == nil }
+
+        init(record: PageRecord, ownInk: DeviceInk, otherInks: [UUID: DeviceInk], ownItems: DeviceItems = DeviceItems(),
+             otherItems: [UUID: DeviceItems] = [:], isSaved: Bool) {
             self.record = record
             self.ownInk = ownInk
             self.otherInks = otherInks
+            self.ownItems = ownItems
+            self.otherItems = otherItems
             self.isSaved = isSaved
             refreshVisibleStrokes()
         }
 
         mutating func refreshVisibleStrokes() {
             visibleStrokes = InkMerge.visibleStrokes(from: [ownInk] + otherInks.values)
+            visibleItems = ItemMerge.visibleItems(from: [ownItems] + otherItems.values)
         }
     }
 
@@ -48,12 +59,26 @@ final class NoteDocument {
         var pageID: UUID
     }
 
-    /// Strokes to remove and strokes to add, as one undoable step. Every edit is one of these:
-    /// writing adds, erasing removes (and adds the leftover pieces), moving/recoloring removes
-    /// the originals and adds changed copies.
-    struct StrokeChange {
+    /// A text box or image and its page.
+    struct PlacedItem {
+        var item: PageItem
+        var pageID: UUID
+    }
+
+    /// A text box or image changing: created (no `before`), edited, or deleted (no `after`).
+    struct ItemEdit {
+        var pageID: UUID
+        var before: PageItem?
+        var after: PageItem?
+    }
+
+    /// One undoable step. Every edit is one of these: writing adds strokes, erasing removes them
+    /// (and adds the leftover pieces), moving/recoloring removes the originals and adds changed
+    /// copies; text boxes and images get new versions.
+    struct Edit {
         var removed: [PlacedStroke] = []
         var added: [PlacedStroke] = []
+        var items: [ItemEdit] = []
     }
 
     /// A change as it was applied, with what's needed to undo it.
@@ -66,11 +91,20 @@ final class NoteDocument {
 
         var added: [PlacedStroke] = []
         var removed: [Removal] = []
+        var items: [ItemEdit] = []
 
-        var isEmpty: Bool { added.isEmpty && removed.isEmpty }
+        var isEmpty: Bool { added.isEmpty && removed.isEmpty && items.isEmpty }
 
         /// Folds a later change into this one, so a whole eraser swipe undoes in one step.
         mutating func merge(_ later: AppliedChange) {
+            for edit in later.items {
+                let id = edit.before?.id ?? edit.after?.id
+                if let index = items.firstIndex(where: { ($0.before?.id ?? $0.after?.id) == id && $0.pageID == edit.pageID }) {
+                    items[index].after = edit.after
+                } else {
+                    items.append(edit)
+                }
+            }
             for removal in later.removed {
                 if let index = added.firstIndex(where: { $0.stroke.id == removal.placed.stroke.id }) {
                     // Added and removed within the group: it never existed before or after.
@@ -86,7 +120,7 @@ final class NoteDocument {
     private(set) var note: NoteRecord
     /// Where the note's package is. Only read or changed on `NotesIO.queue`, so a rename and the
     /// saves queued around it always agree on where the note is.
-    private final class Location: @unchecked Sendable {
+    nonisolated private final class Location: @unchecked Sendable {
         var url: URL
         init(_ url: URL) { self.url = url }
     }
@@ -110,6 +144,7 @@ final class NoteDocument {
     @ObservationIgnored private var noteNeedsSave = false
     @ObservationIgnored private var pageRecordsToSave: Set<UUID> = []
     @ObservationIgnored private var inkToSave: Set<UUID> = []
+    @ObservationIgnored private var itemsToSave: Set<UUID> = []
     @ObservationIgnored private var saveTask: Task<Void, Never>?
 
     /// Changes are written this long after the last edit, so a burst of writing is one save.
@@ -123,7 +158,9 @@ final class NoteDocument {
         self.pages = loadedPages.map { loaded in
             var others = loaded.inks
             let own = others.removeValue(forKey: folder.deviceID) ?? DeviceInk()
-            return Page(record: loaded.record, ownInk: own, otherInks: others, isSaved: true)
+            var otherItems = loaded.items
+            let ownItems = otherItems.removeValue(forKey: folder.deviceID) ?? DeviceItems()
+            return Page(record: loaded.record, ownInk: own, otherInks: others, ownItems: ownItems, otherItems: otherItems, isSaved: true)
         }
         _ = normalizeTrailingPages()
     }
@@ -171,11 +208,11 @@ final class NoteDocument {
 
     /// Adds one pen stroke: a single piece, or one piece per page if it crossed a page edge.
     func addStroke(_ pieces: [PlacedStroke]) {
-        apply(StrokeChange(added: pieces))
+        apply(Edit(added: pieces))
     }
 
     /// Applies a change and records it for undo (as part of the open group, if any).
-    func apply(_ change: StrokeChange) {
+    func apply(_ change: Edit) {
         var applied = AppliedChange()
         var touched: [UUID: CGRect] = [:]
         for placed in change.removed {
@@ -192,6 +229,13 @@ final class NoteDocument {
             pages[index].ownInk.strokes.append(placed.stroke)
             applied.added.append(placed)
             touched[placed.pageID, default: .null] = touched[placed.pageID, default: .null].union(placed.stroke.bounds)
+        }
+        for edit in change.items {
+            guard let index = pageIndex(edit.pageID) else { continue }
+            let after = setItem(edit.after, replacing: edit.before, onPageAt: index)
+            applied.items.append(ItemEdit(pageID: edit.pageID, before: edit.before, after: after))
+            let area = (edit.before?.bounds ?? .null).union(edit.after?.bounds ?? .null)
+            touched[edit.pageID, default: .null] = touched[edit.pageID, default: .null].union(area)
         }
         guard !applied.isEmpty else { return }
         finish(touched)
@@ -231,6 +275,11 @@ final class NoteDocument {
             }
             touched[removal.placed.pageID, default: .null] = touched[removal.placed.pageID, default: .null].union(removal.placed.stroke.bounds)
         }
+        for edit in change.items.reversed() {
+            guard let index = pageIndex(edit.pageID) else { continue }
+            _ = setItem(edit.before, replacing: edit.after, onPageAt: index)
+            touched[edit.pageID, default: .null] = touched[edit.pageID, default: .null].union((edit.before?.bounds ?? .null).union(edit.after?.bounds ?? .null))
+        }
         finish(touched)
     }
 
@@ -247,7 +296,81 @@ final class NoteDocument {
             pages[index].ownInk.strokes.append(placed.stroke)
             touched[placed.pageID, default: .null] = touched[placed.pageID, default: .null].union(placed.stroke.bounds)
         }
+        for edit in change.items {
+            guard let index = pageIndex(edit.pageID) else { continue }
+            _ = setItem(edit.after, replacing: edit.before, onPageAt: index)
+            touched[edit.pageID, default: .null] = touched[edit.pageID, default: .null].union((edit.before?.bounds ?? .null).union(edit.after?.bounds ?? .null))
+        }
         finish(touched)
+    }
+
+    /// Saves a new version of an item (stamped now, so it wins over every device's older
+    /// versions), or deletes `previous` when `item` is nil. Returns the version saved.
+    private func setItem(_ item: PageItem?, replacing previous: PageItem?, onPageAt index: Int) -> PageItem? {
+        let now = Date()
+        if var item {
+            item.modifiedAt = max(now, (pages[index].visibleItems.first { $0.id == item.id }?.modifiedAt ?? .distantPast) + 0.001)
+            pages[index].ownItems.items.removeAll { $0.id == item.id }
+            pages[index].ownItems.items.append(item)
+            pages[index].ownItems.deleted[item.id] = nil
+            return item
+        }
+        if let previous {
+            pages[index].ownItems.items.removeAll { $0.id == previous.id }
+            pages[index].ownItems.deleted[previous.id] = now
+        }
+        return nil
+    }
+
+    // MARK: - Images
+
+    /// Saves an image file into the note package (after any saves already queued).
+    func saveImageFile(_ data: Data, named fileName: String) {
+        let folder = folder, location = location
+        NotesIO.queue.async {
+            do {
+                try folder.saveImage(data, named: fileName, inNoteAt: location.url)
+            } catch {
+                Self.logger.error("Saving image failed: \(error)")
+            }
+        }
+    }
+
+    /// The raw file of an image in the note package (for copying it elsewhere).
+    func imageData(named fileName: String) async -> Data? {
+        let folder = folder, location = location
+        return (try? await NotesIO.run { folder.loadImageData(named: fileName, inNoteAt: location.url) }) ?? nil
+    }
+
+    /// Reads and decodes an image from the note package.
+    func loadImage(named fileName: String) async -> CGImage? {
+        let folder = folder, location = location
+        let data = try? await NotesIO.run { folder.loadImageData(named: fileName, inNoteAt: location.url) }
+        guard let data = data ?? nil else { return nil }
+        return await Task.detached(priority: .userInitiated) { ImageLoading.cgImage(from: data) }.value
+    }
+
+    /// Adds scanned pages (each an image file already saved) after a page, as page backgrounds.
+    func insertScannedPages(_ fileNames: [String], after pageID: UUID?) {
+        guard !fileNames.isEmpty else { return }
+        let index = pageID.flatMap { pageIndex($0) } ?? max(pages.count - 2, 0)
+        let start = pages.indices.contains(index) ? pages[index].record.sortKey : 0
+        let end = index + 1 < pages.count ? pages[index + 1].record.sortKey : start + 1
+        for (offset, fileName) in fileNames.enumerated() {
+            var record = PageRecord(
+                sortKey: start + (end - start) * Double(offset + 1) / Double(fileNames.count + 1),
+                size: note.defaultPageSize,
+                paper: PaperStyle(template: .blank, color: .white)
+            )
+            record.background = .image(fileName: fileName)
+            pages.insert(Page(record: record, ownInk: DeviceInk(), otherInks: [:], isSaved: true), at: min(index + 1 + offset, pages.count))
+            pageRecordsToSave.insert(record.id)
+        }
+        note.modifiedAt = Date()
+        noteNeedsSave = true
+        scheduleSave()
+        _ = normalizeTrailingPages()
+        onChange?(.pagesChanged)
     }
 
     /// Changes the paper of the whole note (and pages added later), or of one page.
@@ -305,12 +428,12 @@ final class NoteDocument {
     private func normalizeTrailingPages() -> Bool {
         var changed = false
         while pages.count >= 2,
-              let last = pages.last, !last.isSaved, last.visibleStrokes.isEmpty,
-              pages[pages.count - 2].visibleStrokes.isEmpty {
+              let last = pages.last, !last.isSaved, last.isBlank,
+              pages[pages.count - 2].isBlank {
             pages.removeLast()
             changed = true
         }
-        if pages.last.map({ !$0.visibleStrokes.isEmpty }) ?? true {
+        if pages.last.map({ !$0.isBlank }) ?? true {
             appendBlankPage()
             changed = true
         }
@@ -334,6 +457,7 @@ final class NoteDocument {
             pageRecordsToSave.insert(pages[index].id)
         }
         inkToSave.insert(pages[index].id)
+        itemsToSave.insert(pages[index].id)
         note.modifiedAt = Date()
         noteNeedsSave = true
         scheduleSave()
@@ -355,10 +479,12 @@ final class NoteDocument {
         let note = noteNeedsSave ? self.note : nil
         let records = pages.filter { pageRecordsToSave.contains($0.id) }.map(\.record)
         let inks = pages.filter { inkToSave.contains($0.id) }.map { ($0.id, $0.ownInk) }
-        guard note != nil || !records.isEmpty || !inks.isEmpty else { return }
+        let items = pages.filter { itemsToSave.contains($0.id) }.map { ($0.id, $0.ownItems) }
+        guard note != nil || !records.isEmpty || !inks.isEmpty || !items.isEmpty else { return }
         noteNeedsSave = false
         pageRecordsToSave.removeAll()
         inkToSave.removeAll()
+        itemsToSave.removeAll()
 
         let folder = folder
         let location = location
@@ -373,6 +499,9 @@ final class NoteDocument {
                 for (pageID, ink) in inks {
                     try folder.saveOwnInk(ink, page: pageID, inNoteAt: noteURL)
                 }
+                for (pageID, pageItems) in items {
+                    try folder.saveOwnItems(pageItems, page: pageID, inNoteAt: noteURL)
+                }
                 if let note {
                     try folder.save(note, at: noteURL)
                 }
@@ -382,7 +511,7 @@ final class NoteDocument {
                 failed = true
             }
             Task { @MainActor [weak self] in
-                self?.saveDidFinish(failed: failed, records: records.map(\.id), inks: inks.map(\.0))
+                self?.saveDidFinish(failed: failed, records: records.map(\.id), inks: inks.map(\.0) + items.map(\.0))
             }
         }
     }
@@ -394,6 +523,7 @@ final class NoteDocument {
         noteNeedsSave = true
         pageRecordsToSave.formUnion(records)
         inkToSave.formUnion(inks)
+        itemsToSave.formUnion(inks)
     }
 
     #if DEBUG

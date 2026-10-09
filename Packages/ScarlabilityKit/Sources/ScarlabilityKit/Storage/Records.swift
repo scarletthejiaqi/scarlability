@@ -41,6 +41,8 @@ public struct PageRecord: Codable, Identifiable, Hashable, Sendable {
     public var sortKey: Double
     public var size: CGSize
     public var paper: PaperStyle
+    /// Fills the page under everything, e.g. a scanned document.
+    public var background: PageBackground?
     public var createdAt: Date
 
     public init(id: UUID = UUID(), sortKey: Double, size: CGSize, paper: PaperStyle, createdAt: Date = Date()) {

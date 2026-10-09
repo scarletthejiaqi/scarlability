@@ -6,9 +6,10 @@ import UIKit
 struct NoteCanvas: UIViewRepresentable {
     let document: NoteDocument
     let settings: ToolSettings
+    let session: EditorSession
 
     func makeUIView(context: Context) -> NoteCanvasView {
-        NoteCanvasView(document: document, settings: settings)
+        NoteCanvasView(document: document, settings: settings, session: session)
     }
 
     func updateUIView(_ canvas: NoteCanvasView, context: Context) {
@@ -29,45 +30,91 @@ struct NoteCanvas: UIViewRepresentable {
 /// - Content is laid out in page points; zooming scales it, and the page tiles redraw sharply.
 final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegate,
     UIEditMenuInteractionDelegate, UIPencilInteractionDelegate {
-    private let document: NoteDocument
-    private let settings: ToolSettings
+    let document: NoteDocument
+    let settings: ToolSettings
+    let session: EditorSession
 
-    private let scrollView = CanvasScrollView()
-    private let contentView = UIView()
-    private lazy var liveInk = LiveInk(host: contentView.layer)
-    private let strokeRecognizer = StrokeGestureRecognizer()
-    private let zoomPinch = UIPinchGestureRecognizer()
-    private let undoTap = UITapGestureRecognizer()
-    private let redoTap = UITapGestureRecognizer()
+    let scrollView = CanvasScrollView()
+    let contentView = UIView()
+    lazy var liveInk = LiveInk(host: contentView.layer)
+    let strokeRecognizer = StrokeGestureRecognizer()
+    let zoomPinch = UIPinchGestureRecognizer()
+    let undoTap = UITapGestureRecognizer()
+    let redoTap = UITapGestureRecognizer()
     /// One finger moving or resizing a selection (when fingers don't draw).
-    private let selectionPan = UIPanGestureRecognizer()
+    let selectionPan = UIPanGestureRecognizer()
     /// One finger tapping with the select tool: show the menu, deselect, or offer Paste.
-    private let selectionTap = UITapGestureRecognizer()
-    private var editMenu: UIEditMenuInteraction?
+    let selectionTap = UITapGestureRecognizer()
+    var editMenu: UIEditMenuInteraction?
 
-    private var pageViews: [UUID: PageView] = [:]
+    var pageViews: [UUID: PageView] = [:]
     /// Which pages currently show the thin line along their bottom edge (all but the last).
-    private var pagesWithBottomEdge: Set<UUID> = []
+    var pagesWithBottomEdge: Set<UUID> = []
     /// Stroke outlines are built once and reused for every redraw.
-    private var renderedStrokes: [UUID: RenderedStroke] = [:]
+    var renderedStrokes: [UUID: RenderedStroke] = [:]
     /// Strokes left out of the page tiles while a selection of them is being dragged.
-    private var hiddenStrokeIDs: Set<UUID> = []
-    private var pendingHandoffs: [PendingHandoff] = []
-    private var pinchStart: (position: CGFloat, anchor: CGPoint)?
-    private var zoomDetents = ZoomDetents(zooms: [])
-    private var lastPencilActivity = Date.distantPast
-    private var laidOutSize: CGSize = .zero
+    var hiddenStrokeIDs: Set<UUID> = []
+    var pendingHandoffs: [PendingHandoff] = []
+    var pinchStart: (position: CGFloat, anchor: CGPoint)?
+    var zoomDetents = ZoomDetents(zooms: [])
+    var lastPencilActivity = Date.distantPast
+    var laidOutSize: CGSize = .zero
     /// Zoom relative to "page width fills the screen", kept when the window resizes or rotates.
-    private var relativeZoom: CGFloat = 1
+    var relativeZoom: CGFloat = 1
 
     // What the current touch is doing.
-    private var activeStroke: ActiveStroke?
-    private var eraserPosition: CGPoint?
-    private var lasso: [CGPoint]?
-    private var manipulation: Manipulation?
-    private var selection: Selection?
+    var activeStroke: ActiveStroke?
+    var eraserPosition: CGPoint?
+    var lasso: [CGPoint]?
+    var manipulation: Manipulation?
+    var selection: Selection?
+    var lassoStart: CGPoint?
+    /// Where a Paste menu was opened (nil when the menu belongs to the selection).
+    var menuPoint: CGPoint?
 
-    private struct ActiveStroke {
+    // Text boxes and images.
+    var renderedItems: [UUID: RenderedItem] = [:]
+    /// Decoded image files, by file name.
+    var images: [String: CGImage] = [:]
+    var loadingImages: Set<String> = []
+    /// Items left out of the page tiles while they're edited or dragged.
+    var hiddenItemIDs: Set<UUID> = []
+    let textView = UITextView()
+    /// Drag to set the width of the text box being typed in.
+    let textWidthHandle = UIView()
+    var textEditing: TextEditing?
+    /// How much of the canvas the on-screen keyboard covers.
+    var keyboardOverlap: CGFloat = 0
+    let importer = ImageImporter()
+    var cropping: Cropping?
+    let cropDim = CALayer()
+    let cropBright = CALayer()
+    let cropMask = CAShapeLayer()
+    let cropOutline = CAShapeLayer()
+    let cropBar = UIStackView()
+
+    /// The text box being typed in.
+    struct TextEditing {
+        var pageID: UUID
+        /// The saved version (nil for a new box).
+        var original: PageItem?
+        var item: PageItem
+    }
+
+    /// An image being cropped. Rects are in page coordinates, before rotation (about `pivot`).
+    struct Cropping {
+        var placed: NoteDocument.PlacedItem
+        /// The whole uncropped image.
+        var full: CGRect
+        /// The part kept, as fractions of the whole image.
+        var crop: CGRect
+        /// The center the image turns around (its frame's center when cropping started).
+        var pivot: CGPoint
+        /// Which edges the current drag moves.
+        var dragging: (left: Bool, right: Bool, top: Bool, bottom: Bool)?
+    }
+
+    struct ActiveStroke {
         var pageID: UUID
         var pageView: PageView
         var tool: InkTool
@@ -84,14 +131,15 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         var shape: ShapeRecognizer.Shape?
     }
 
-    /// Selected strokes and the box around them, in content coordinates.
-    private struct Selection {
+    /// Selected strokes, text boxes and images, and the box around them in content coordinates.
+    struct Selection {
         var strokes: [NoteDocument.PlacedStroke]
+        var items: [NoteDocument.PlacedItem] = []
         var box: CGRect
     }
 
     /// A selection being moved, resized or rotated. The transform is in content coordinates.
-    private struct Manipulation {
+    struct Manipulation {
         enum Kind {
             case move(start: CGPoint)
             case resize(anchor: CGPoint, startDistance: CGFloat)
@@ -105,7 +153,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     }
 
     /// A finished stroke that the live ink keeps showing until the page tiles have drawn it.
-    private struct PendingHandoff {
+    struct PendingHandoff {
         struct Key: Hashable {
             var pageID: UUID
             var isInk: Bool
@@ -125,25 +173,25 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     }
 
     /// Gray space around the column of pages, in page points.
-    private static let pageMargin: CGFloat = 14
-    private static let bottomMargin: CGFloat = 80
+    static let pageMargin: CGFloat = 14
+    static let bottomMargin: CGFloat = 80
     /// Maximum zoom, relative to "page width fills the screen".
-    private static let maxZoom: CGFloat = 5
-    private static let pageEdgeColor = InkColor(hex: 0xD1D1D6)
+    static let maxZoom: CGFloat = 5
+    static let pageEdgeColor = InkColor(hex: 0xD1D1D6)
     /// Touches bigger than this (in points) are a palm, not a finger. iPads report touch size in
     /// steps of about 10.4 points, and a fingertip is often 31.
-    private static let maxFingerRadius: CGFloat = 45
+    static let maxFingerRadius: CGFloat = 45
     /// Finger taps right after writing are usually the palm lifting, not an undo.
-    private static let tapQuietPeriod: TimeInterval = 0.35
+    static let tapQuietPeriod: TimeInterval = 0.35
     /// Hold the pen this still (screen points) for this long to snap a shape.
-    private static let holdTolerance: CGFloat = 3
-    private static let holdDuration: TimeInterval = 0.5
+    static let holdTolerance: CGFloat = 3
+    static let holdDuration: TimeInterval = 0.5
     /// How far the select tool can move (screen points) and still count as a tap.
-    private static let tapSlop: CGFloat = 6
+    static let tapSlop: CGFloat = 6
     /// How close (screen points) a touch must be to a selection handle to grab it.
-    private static let handleReach: CGFloat = 22
-    private static let duplicateOffset: CGFloat = 24
-    private static let inkPasteboardType = "scarlability.ink"
+    static let handleReach: CGFloat = 22
+    static let duplicateOffset: CGFloat = 24
+    static let inkPasteboardType = "scarlability.ink"
 
     var drawsWithFinger = false {
         didSet {
@@ -155,13 +203,16 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         didSet {
             guard tool != oldValue else { return }
             if oldValue == .select { clearSelection() }
+            if oldValue == .text { endTextEditing() }
+            finishCropping(apply: true)
             configureTouchTypes()
         }
     }
 
-    init(document: NoteDocument, settings: ToolSettings) {
+    init(document: NoteDocument, settings: ToolSettings, session: EditorSession) {
         self.document = document
         self.settings = settings
+        self.session = session
         super.init(frame: .zero)
         backgroundColor = .secondarySystemBackground
 
@@ -217,6 +268,9 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         editMenu = menu
         let pencil = UIPencilInteraction(delegate: self)
         addInteraction(pencil)
+        setUpTextEditing()
+        setUpImages()
+        session.handler = { [weak self] command in self?.perform(command) }
 
         drawsWithFinger = settings.drawsWithFinger
         tool = settings.tool
@@ -234,12 +288,12 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
 
     // MARK: - Layout and zoom
 
-    private var contentWidth: CGFloat {
+    var contentWidth: CGFloat {
         (document.pages.map(\.record.size.width).max() ?? PageSize.a4.width) + 2 * Self.pageMargin
     }
 
     /// Zoom at which the page width fills the screen.
-    private var widthFitZoom: CGFloat { bounds.width / contentWidth }
+    var widthFitZoom: CGFloat { bounds.width / contentWidth }
 
     /// Resolution for the page tiles, chosen so they match the screen pixel for pixel at the
     /// normal writing zoom (page width fills the screen) and at 2×, 4×… that zoom.
@@ -248,7 +302,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     /// sharp as the screen needs. With the screen's own scale, the normal zoom would get tiles at
     /// 4 px/pt shrunk to 2.6, so finished ink looked softer than the live stroke the moment the
     /// pen lifted. The 0.1% extra keeps rounding from picking the next level up.
-    private var tileScale: CGFloat {
+    var tileScale: CGFloat {
         let zoom = widthFitZoom
         guard zoom > 0 else { return traitCollection.displayScale }
         let level = pow(2, ceil(log2(zoom)))
@@ -256,7 +310,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     }
 
     /// Pixels per content point that the page tiles use at the current zoom.
-    private var tileRasterScale: CGFloat {
+    var tileRasterScale: CGFloat {
         let base = tileScale
         let needed = scrollView.zoomScale * traitCollection.displayScale / base
         // PageTileLayer has levels from 1/8× to 8×.
@@ -265,7 +319,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     }
 
     /// Zoom at which a whole page fits on screen.
-    private var pageFitZoom: CGFloat {
+    var pageFitZoom: CGFloat {
         guard let size = document.pages.first?.record.size else { return widthFitZoom }
         let inset = scrollView.adjustedContentInset
         let height = bounds.height - inset.top - inset.bottom
@@ -300,7 +354,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         }
     }
 
-    private func layoutPages() {
+    func layoutPages() {
         let width = contentWidth
         var y = Self.pageMargin
         for page in document.pages {
@@ -320,19 +374,20 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     }
 
     /// Centers the pages horizontally when zoomed out narrower than the screen.
-    private func centerContent() {
+    func centerContent() {
         let inset = max(0, (scrollView.bounds.width - scrollView.contentSize.width) / 2)
-        scrollView.contentInset = UIEdgeInsets(top: 0, left: inset, bottom: 0, right: inset)
+        // Room at the bottom for the keyboard, so you can scroll the last lines above it.
+        scrollView.contentInset = UIEdgeInsets(top: 0, left: inset, bottom: keyboardOverlap, right: inset)
     }
 
     /// All the pages, in content coordinates.
-    private func pagesColumn() -> CGRect {
+    func pagesColumn() -> CGRect {
         let frames = document.pages.compactMap { pageViews[$0.id]?.frame }
         guard let first = frames.first else { return .null }
         return frames.dropFirst().reduce(first) { $0.union($1) }
     }
 
-    private func highlighterHosts(overlapping bounds: CGRect) -> [LiveInk.HighlighterHost] {
+    func highlighterHosts(overlapping bounds: CGRect) -> [LiveInk.HighlighterHost] {
         document.pages.compactMap { page in
             guard let view = pageViews[page.id], view.frame.intersects(bounds) else { return nil }
             return LiveInk.HighlighterHost(layer: view.highlighterHost, frame: view.frame)
@@ -347,9 +402,12 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             relativeZoom = scrollView.zoomScale / widthFitZoom
         }
         showSelectionOverlay()
+        layoutCropControls()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        layoutTextEditor()
+        layoutCropControls()
         // Remember which page is in the middle of the screen, for "this page" paper changes.
         let middle = scrollView.convert(CGPoint(x: scrollView.bounds.midX, y: scrollView.bounds.midY), to: contentView)
         if let page = document.pages.first(where: { pageViews[$0.id]?.frame.minY ?? .infinity <= middle.y && middle.y < pageViews[$0.id]?.frame.maxY ?? -.infinity }) {
@@ -360,6 +418,8 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     @objc private func handlePinch(_ pinch: UIPinchGestureRecognizer) {
         switch pinch.state {
         case .began:
+            // Text is laid out for one zoom; finish typing before zooming.
+            endTextEditing()
             // The pinch moves the page itself from here on, including two-finger panning.
             scrollView.cancelPanning()
             editMenu?.dismissMenu()
@@ -386,7 +446,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
 
     // MARK: - Document changes
 
-    private func documentDidChange(_ change: NoteDocument.Change) {
+    func documentDidChange(_ change: NoteDocument.Change) {
         if let selection, manipulation == nil, selection.strokes.contains(where: { placed in
             !(document.pages.first { $0.id == placed.pageID }?.visibleStrokes.contains { $0.id == placed.stroke.id } ?? false)
         }) {
@@ -402,7 +462,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         }
     }
 
-    private func syncPageViews() {
+    func syncPageViews() {
         let ids = Set(document.pages.map(\.id))
         for (id, view) in pageViews where !ids.contains(id) {
             view.removeFromSuperview()
@@ -427,9 +487,15 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         layoutPages()
     }
 
-    private func updateInk(onPage pageID: UUID, changedRect: CGRect?) {
+    func updateInk(onPage pageID: UUID, changedRect: CGRect?) {
         guard let page = document.pages.first(where: { $0.id == pageID }), let view = pageViews[pageID] else { return }
         let strokes = page.visibleStrokes.filter { !hiddenStrokeIDs.contains($0.id) }.map(rendered)
+        let items = page.visibleItems.filter { !hiddenItemIDs.contains($0.id) }.map(renderedItem)
+        var background: CGImage?
+        if case .image(let fileName)? = page.record.background {
+            background = images[fileName]
+            if background == nil { loadImage(fileName) }
+        }
         let hasBottomEdge = pageID != document.pages.last?.id
         if hasBottomEdge {
             pagesWithBottomEdge.insert(pageID)
@@ -441,20 +507,22 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
                 paper: page.record.paper,
                 size: page.record.size,
                 strokes: strokes,
+                items: items,
+                backgroundImage: background,
                 bottomEdgeColor: hasBottomEdge ? Self.pageEdgeColor : nil
             ),
             changedRect: changedRect
         )
     }
 
-    private func rendered(_ stroke: Stroke) -> RenderedStroke {
+    func rendered(_ stroke: Stroke) -> RenderedStroke {
         if let cached = renderedStrokes[stroke.id] { return cached }
         let rendered = RenderedStroke(stroke)
         renderedStrokes[stroke.id] = rendered
         return rendered
     }
 
-    private func pageOrigin(_ pageID: UUID) -> CGPoint {
+    func pageOrigin(_ pageID: UUID) -> CGPoint {
         pageViews[pageID]?.frame.origin ?? .zero
     }
 
@@ -464,6 +532,14 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         if recognizer.touchType == .pencil {
             lastPencilActivity = Date()
         }
+        if recognizer.state == .began, textEditing != nil, tool != .text {
+            // Writing elsewhere finishes the text box being typed in.
+            endTextEditing()
+        }
+        if cropping != nil {
+            handleCropDrag(recognizer.state, at: recognizer.takeSamples().last?.location)
+            return
+        }
         switch tool {
         case .pen, .highlighter:
             handleDrawing(recognizer)
@@ -471,12 +547,14 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             handleEraser(recognizer)
         case .select:
             handleSelect(recognizer)
+        case .text:
+            handleTextTool(recognizer)
         }
     }
 
     // MARK: - Pen and highlighter
 
-    private func handleDrawing(_ recognizer: StrokeGestureRecognizer) {
+    func handleDrawing(_ recognizer: StrokeGestureRecognizer) {
         switch recognizer.state {
         case .began:
             beginStroke(recognizer)
@@ -492,7 +570,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         }
     }
 
-    private func beginStroke(_ recognizer: StrokeGestureRecognizer) {
+    func beginStroke(_ recognizer: StrokeGestureRecognizer) {
         let samples = recognizer.takeSamples()
         guard let start = samples.first,
               let page = document.pages.first(where: { pageViews[$0.id]?.frame.contains(start.location) == true }),
@@ -524,11 +602,11 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         document.beginWriting(onPage: page.id)
     }
 
-    private func consumeSamples(_ recognizer: StrokeGestureRecognizer) {
+    func consumeSamples(_ recognizer: StrokeGestureRecognizer) {
         add(recognizer.takeSamples(), forceUpdates: recognizer.takeForceUpdates(), predicted: recognizer.predictedLocations)
     }
 
-    private func add(_ samples: [StrokeGestureRecognizer.Sample], forceUpdates: [StrokeGestureRecognizer.ForceUpdate], predicted: [CGPoint]) {
+    func add(_ samples: [StrokeGestureRecognizer.Sample], forceUpdates: [StrokeGestureRecognizer.ForceUpdate], predicted: [CGPoint]) {
         guard var active = activeStroke else { return }
         // Once snapped to a shape, the stroke stays that shape until the pen lifts.
         guard active.shape == nil else { return }
@@ -560,7 +638,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     }
 
     /// The pen has held still: if the stroke looks like a shape, replace it with a clean one.
-    private func snapToShape() {
+    func snapToShape() {
         guard var active = activeStroke, active.shape == nil else { return }
         let points = active.builder.finishedPoints()
         guard let shape = ShapeRecognizer.recognize(points.map(\.location), linesOnly: active.tool == .highlighter) else { return }
@@ -571,12 +649,12 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     }
 
     /// A snapped shape is drawn at the stroke's average width.
-    private func shapePoints(_ shape: ShapeRecognizer.Shape, from points: [InkPoint]) -> [InkPoint] {
+    func shapePoints(_ shape: ShapeRecognizer.Shape, from points: [InkPoint]) -> [InkPoint] {
         let width = points.map(\.width).reduce(0, +) / Float(max(points.count, 1))
         return ShapeRecognizer.points(for: shape, width: width)
     }
 
-    private func finishStroke() {
+    func finishStroke() {
         guard let active = activeStroke else { return }
         activeStroke = nil
         active.holdTimer?.cancel()
@@ -599,7 +677,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         waitForTiles(handoffID, toShow: pieces)
     }
 
-    private func cancelStroke() {
+    func cancelStroke() {
         guard let active = activeStroke else { return }
         active.holdTimer?.cancel()
         activeStroke = nil
@@ -607,12 +685,12 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         document.cancelWriting()
     }
 
-    private func toContent(_ points: [InkPoint], from origin: CGPoint) -> [InkPoint] {
+    func toContent(_ points: [InkPoint], from origin: CGPoint) -> [InkPoint] {
         points.map { InkPoint(x: $0.x + Float(origin.x), y: $0.y + Float(origin.y), width: $0.width) }
     }
 
     /// Turns points in content coordinates into strokes, one piece per page they touch.
-    private func place(_ contentPoints: [InkPoint], tool: InkTool, color: InkColor, createdAt: Date) -> [NoteDocument.PlacedStroke] {
+    func place(_ contentPoints: [InkPoint], tool: InkTool, color: InkColor, createdAt: Date) -> [NoteDocument.PlacedStroke] {
         let pages = document.pages
         let frames = pages.map { pageViews[$0.id]?.frame ?? .null }
         return PageSplitter.split(contentPoints, pageFrames: frames).map { piece in
@@ -624,7 +702,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
 
     // MARK: - Eraser
 
-    private func handleEraser(_ recognizer: StrokeGestureRecognizer) {
+    func handleEraser(_ recognizer: StrokeGestureRecognizer) {
         let locations = recognizer.takeSamples().map(\.location)
         switch recognizer.state {
         case .began:
@@ -644,10 +722,10 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     }
 
     /// Erases along a path in content coordinates, continuing from the last eraser position.
-    private func erase(along locations: [CGPoint]) {
+    func erase(along locations: [CGPoint]) {
         guard var from = eraserPosition, let last = locations.last else { return }
         let radius = CGFloat(settings.eraserRadius)
-        var change = NoteDocument.StrokeChange()
+        var change = NoteDocument.Edit()
         for to in locations {
             for page in document.pages {
                 let reach = CGRect(x: min(from.x, to.x), y: min(from.y, to.y), width: abs(to.x - from.x), height: abs(to.y - from.y))
@@ -680,459 +758,10 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         }
     }
 
-    // MARK: - Select
-
-    private func handleSelect(_ recognizer: StrokeGestureRecognizer) {
-        let locations = recognizer.takeSamples().map(\.location)
-        switch recognizer.state {
-        case .began:
-            guard let start = locations.first else { return }
-            scrollView.stopScrolling()
-            beginSelectGesture(at: start)
-            locations.dropFirst().forEach(continueSelectGesture)
-        case .changed:
-            locations.forEach(continueSelectGesture)
-        case .ended:
-            locations.forEach(continueSelectGesture)
-            endSelectGesture()
-        default:
-            cancelSelectGesture()
-        }
-    }
-
-    @objc private func handleSelectionPan(_ pan: UIPanGestureRecognizer) {
-        let location = pan.location(in: contentView)
-        switch pan.state {
-        case .began:
-            beginSelectGesture(at: location)
-        case .changed:
-            continueSelectGesture(location)
-        case .ended:
-            endSelectGesture()
-        default:
-            cancelSelectGesture()
-        }
-    }
-
-    @objc private func handleSelectionTap(_ tap: UITapGestureRecognizer) {
-        selectToolTapped(at: tap.location(in: contentView))
-    }
-
-    /// Which part of the selection a touch at `point` (content coordinates) grabs.
-    private func selectionGrab(at point: CGPoint) -> Manipulation.Kind? {
-        guard let selection else { return nil }
-        let zoom = scrollView.zoomScale
-        let handles = SelectionHandles(box: selection.box, rotation: 0, zoom: zoom)
-        let reach = Self.handleReach / zoom
-        let center = CGPoint(x: selection.box.midX, y: selection.box.midY)
-        if point.distance(to: handles.rotate) <= reach {
-            return .rotate(center: center, startAngle: atan2(point.y - center.y, point.x - center.x))
-        }
-        if point.distance(to: handles.resize) <= reach {
-            let anchor = selection.box.origin
-            return .resize(anchor: anchor, startDistance: max(point.distance(to: anchor), 1))
-        }
-        if selection.box.insetBy(dx: -8 / zoom, dy: -8 / zoom).contains(point) {
-            return .move(start: point)
-        }
-        return nil
-    }
-
-    private var lassoStart: CGPoint?
-
-    private func beginSelectGesture(at point: CGPoint) {
-        editMenu?.dismissMenu()
-        if let grab = selectionGrab(at: point) {
-            manipulation = Manipulation(kind: grab)
-            lassoStart = point
-            return
-        }
-        clearSelection()
-        lassoStart = point
-        lasso = [point]
-    }
-
-    private func continueSelectGesture(_ point: CGPoint) {
-        if var current = manipulation, let selection {
-            switch current.kind {
-            case .move(let start):
-                current.transform = CGAffineTransform(translationX: point.x - start.x, y: point.y - start.y)
-            case .resize(let anchor, let startDistance):
-                let scale = min(max(point.distance(to: anchor) / startDistance, 0.1), 10)
-                current.transform = CGAffineTransform(translationX: anchor.x, y: anchor.y).scaledBy(x: scale, y: scale).translatedBy(x: -anchor.x, y: -anchor.y)
-                current.widthScale = scale
-            case .rotate(let center, let startAngle):
-                let angle = atan2(point.y - center.y, point.x - center.x) - startAngle
-                current.transform = CGAffineTransform(translationX: center.x, y: center.y).rotated(by: angle).translatedBy(x: -center.x, y: -center.y)
-                current.rotation = angle
-            }
-            manipulation = current
-            if hiddenStrokeIDs.isEmpty, !current.transform.isIdentity {
-                hide(selection.strokes)
-            }
-            liveInk.showPreview(selection.strokes.map { placed in
-                let rendered = rendered(placed.stroke)
-                let origin = pageOrigin(placed.pageID)
-                var transform = CGAffineTransform(translationX: origin.x, y: origin.y).concatenating(current.transform)
-                let page = document.pages.first { $0.id == placed.pageID }
-                let color = placed.stroke.tool == .pen ? placed.stroke.color.displayed(on: page?.record.paper ?? .whiteLined) : placed.stroke.color
-                return LiveInk.Item(path: rendered.path.copy(using: &transform) ?? rendered.path, color: color.cgColor,
-                                    tool: placed.stroke.tool, pageOrigin: .zero)
-            })
-            showSelectionOverlay()
-            return
-        }
-        guard lasso != nil else { return }
-        lasso?.append(point)
-        if let path = lassoPath() {
-            liveInk.showLasso(path, zoom: scrollView.zoomScale)
-        }
-    }
-
-    private func endSelectGesture() {
-        defer {
-            lassoStart = nil
-            lasso = nil
-            liveInk.hideLasso()
-        }
-        if let current = manipulation {
-            manipulation = nil
-            let moved = !current.transform.isIdentity
-            if moved {
-                commitManipulation(current)
-            } else {
-                unhideAll()
-                showSelectionOverlay()
-            }
-            presentMenu()
-            return
-        }
-        guard let points = lasso, let start = lassoStart else { return }
-        let travel = points.map { $0.distance(to: start) }.max() ?? 0
-        if travel < Self.tapSlop / scrollView.zoomScale {
-            selectToolTapped(at: start)
-            return
-        }
-        guard let outline = lassoOutline() else { return }
-        select(strokesInside: outline)
-    }
-
-    private func cancelSelectGesture() {
-        if manipulation != nil {
-            manipulation = nil
-            unhideAll()
-            showSelectionOverlay()
-        }
-        lassoStart = nil
-        lasso = nil
-        liveInk.hideLasso()
-    }
-
-    private func selectToolTapped(at point: CGPoint) {
-        if let selection {
-            if selection.box.insetBy(dx: -8, dy: -8).contains(point) {
-                presentMenu()
-            } else {
-                clearSelection()
-            }
-        } else if UIPasteboard.general.contains(pasteboardTypes: [Self.inkPasteboardType]) {
-            presentMenu(at: point)
-        }
-    }
-
-    /// The lasso outline: freeform as drawn, or the rectangle from start to current point.
-    private func lassoOutline() -> [CGPoint]? {
-        guard let points = lasso, let first = points.first, let last = points.last else { return nil }
-        switch settings.selectMode {
-        case .freeform:
-            return points.count >= 3 ? points : nil
-        case .box:
-            let rect = CGRect(x: min(first.x, last.x), y: min(first.y, last.y), width: abs(last.x - first.x), height: abs(last.y - first.y))
-            return [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
-                    CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY)]
-        }
-    }
-
-    private func lassoPath() -> CGPath? {
-        guard let outline = lassoOutline() else { return nil }
-        let path = CGMutablePath()
-        path.addLines(between: outline)
-        if settings.selectMode == .box { path.closeSubpath() }
-        return path
-    }
-
-    private func select(strokesInside outline: [CGPoint]) {
-        let xs = outline.map(\.x), ys = outline.map(\.y)
-        let bounds = CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
-        var chosen: [NoteDocument.PlacedStroke] = []
-        for page in document.pages {
-            guard let view = pageViews[page.id], view.frame.intersects(bounds) else { continue }
-            let local = outline.map { CGPoint(x: $0.x - view.frame.minX, y: $0.y - view.frame.minY) }
-            for stroke in page.visibleStrokes where StrokeHitTesting.lasso(local, selects: stroke) {
-                chosen.append(.init(stroke: stroke, pageID: page.id))
-            }
-        }
-        setSelection(chosen)
-        if selection != nil {
-            presentMenu()
-        }
-    }
-
-    private func setSelection(_ strokes: [NoteDocument.PlacedStroke]) {
-        guard !strokes.isEmpty else {
-            clearSelection()
-            return
-        }
-        let box = strokes.reduce(CGRect.null) { box, placed in
-            let origin = pageOrigin(placed.pageID)
-            return box.union(placed.stroke.bounds.offsetBy(dx: origin.x, dy: origin.y))
-        }
-        selection = Selection(strokes: strokes, box: box)
-        showSelectionOverlay()
-    }
-
-    private func clearSelection() {
-        selection = nil
-        unhideAll()
-        liveInk.hideSelection()
-        editMenu?.dismissMenu()
-    }
-
-    private func showSelectionOverlay() {
-        guard let selection else {
-            liveInk.hideSelection()
-            return
-        }
-        var box = selection.box
-        var rotation: CGFloat = 0
-        if let current = manipulation {
-            switch current.kind {
-            case .rotate:
-                rotation = current.rotation
-            case .move, .resize:
-                box = box.applying(current.transform)
-            }
-        }
-        liveInk.showSelection(SelectionHandles(box: box, rotation: rotation, zoom: scrollView.zoomScale), zoom: scrollView.zoomScale)
-    }
-
-    /// Leaves strokes out of the page tiles while their moving preview is shown.
-    private func hide(_ strokes: [NoteDocument.PlacedStroke]) {
-        hiddenStrokeIDs = Set(strokes.map(\.stroke.id))
-        for pageID in Set(strokes.map(\.pageID)) {
-            updateInk(onPage: pageID, changedRect: nil)
-        }
-    }
-
-    private func unhideAll() {
-        guard !hiddenStrokeIDs.isEmpty else { return }
-        let pageIDs = Set(document.pages.filter { $0.visibleStrokes.contains { hiddenStrokeIDs.contains($0.id) } }.map(\.id))
-        hiddenStrokeIDs = []
-        liveInk.clearPreview()
-        pageIDs.forEach { updateInk(onPage: $0, changedRect: nil) }
-    }
-
-    private func commitManipulation(_ current: Manipulation) {
-        guard let selection else { return }
-        let added = transformedCopies(of: selection.strokes, by: current.transform, widthScale: current.widthScale, keepDepth: true)
-        hiddenStrokeIDs = []
-        liveInk.clearPreview()
-        document.apply(NoteDocument.StrokeChange(removed: selection.strokes, added: added))
-        setSelection(added)
-    }
-
-    /// Copies of strokes moved by a transform in content coordinates, re-split across pages.
-    private func transformedCopies(of strokes: [NoteDocument.PlacedStroke], by transform: CGAffineTransform, widthScale: CGFloat,
-                                   keepDepth: Bool) -> [NoteDocument.PlacedStroke] {
-        let now = Date()
-        return strokes.flatMap { placed -> [NoteDocument.PlacedStroke] in
-            let origin = pageOrigin(placed.pageID)
-            let toContent = CGAffineTransform(translationX: origin.x, y: origin.y).concatenating(transform)
-            let moved = placed.stroke.transformed(toContent, widthScale: widthScale)
-            return place(moved.points, tool: moved.tool, color: moved.color, createdAt: keepDepth ? moved.createdAt : now)
-        }
-    }
-
-    // MARK: - Selection menu
-
-    private var menuPoint: CGPoint?
-
-    /// Shows the selection's menu above it, or (with `point`) a Paste menu there.
-    private func presentMenu(at point: CGPoint? = nil) {
-        let anchor: CGPoint
-        if let point {
-            anchor = point
-        } else if let selection {
-            anchor = CGPoint(x: selection.box.midX, y: selection.box.minY)
-        } else {
-            return
-        }
-        menuPoint = point
-        let screen = contentView.convert(anchor, to: self)
-        editMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: screen))
-    }
-
-    /// Keeps the menu clear of the selection: above it, or below if there's no room.
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction, targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
-        if menuPoint == nil, let selection {
-            return contentView.convert(selection.box, to: self)
-        }
-        return CGRect(origin: configuration.sourcePoint, size: .zero)
-    }
-
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration,
-                             suggestedActions: [UIMenuElement]) -> UIMenu? {
-        let canPaste = UIPasteboard.general.contains(pasteboardTypes: [Self.inkPasteboardType])
-        let paste = UIAction(title: "Paste", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.paste() }
-        guard selection != nil else {
-            return canPaste ? UIMenu(children: [paste]) : nil
-        }
-        var items: [UIMenuElement] = [
-            UIAction(title: "Cut", image: UIImage(systemName: "scissors")) { [weak self] _ in self?.cutSelection() },
-            UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copySelection() },
-        ]
-        if canPaste { items.append(paste) }
-        items += [
-            UIAction(title: "Duplicate", image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateSelection() },
-            colorMenu(),
-            UIMenu(title: "Thickness", image: UIImage(systemName: "lineweight"), children: [
-                UIAction(title: "Thinner") { [weak self] _ in self?.scaleSelectionWidth(by: 0.8) },
-                UIAction(title: "Thicker") { [weak self] _ in self?.scaleSelectionWidth(by: 1.25) },
-            ]),
-            UIAction(title: "Copy as Image", image: UIImage(systemName: "photo")) { [weak self] _ in self?.copySelectionAsImage() },
-            UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.deleteSelection() },
-        ]
-        return UIMenu(children: items)
-    }
-
-    private func colorMenu() -> UIMenu {
-        let menu = UIMenu(title: "Color", image: UIImage(systemName: "paintpalette"), children: colorActions())
-        menu.preferredElementSize = .small
-        return menu
-    }
-
-    private func colorActions() -> [UIMenuElement] {
-        var colors = settings.pen.colors + settings.highlighter.colors
-        colors += [settings.pen.extraColor, settings.highlighter.extraColor].compactMap { $0 }
-        var seen = Set<InkColor>()
-        let unique = colors.filter { seen.insert($0).inserted }
-        var actions: [UIMenuElement] = unique.map { color in
-            let swatch = UIImage(systemName: "circle.fill")?.withTintColor(UIColor(cgColor: color.cgColor), renderingMode: .alwaysOriginal)
-            return UIAction(title: "", image: swatch) { [weak self] _ in self?.recolorSelection(color) }
-        }
-        actions.append(UIAction(title: "More Colors…", image: UIImage(systemName: "eyedropper")) { [weak self] _ in
-            guard let self, let selection = self.selection else { return }
-            let rect = self.contentView.convert(selection.box, to: nil)
-            let start = selection.strokes.first?.stroke.color ?? .black
-            ColorPickerPresenter.shared.present(color: start, from: rect) { [weak self] color in self?.recolorSelection(color) }
-        })
-        return actions
-    }
-
-    private func recolorSelection(_ color: InkColor) {
-        replaceSelection { $0.replacement(color: color) }
-    }
-
-    private func scaleSelectionWidth(by factor: Float) {
-        replaceSelection { stroke in
-            stroke.replacement(points: stroke.points.map { InkPoint(x: $0.x, y: $0.y, width: $0.width * factor) })
-        }
-        presentMenu()
-    }
-
-    private func replaceSelection(_ change: (Stroke) -> Stroke) {
-        guard let selection else { return }
-        let replaced = selection.strokes.map { NoteDocument.PlacedStroke(stroke: change($0.stroke), pageID: $0.pageID) }
-        replaced.forEach { renderedStrokes[$0.stroke.id] = RenderedStroke($0.stroke) }
-        document.apply(NoteDocument.StrokeChange(removed: selection.strokes, added: replaced))
-        setSelection(replaced)
-    }
-
-    private func duplicateSelection() {
-        guard let selection else { return }
-        let offset = CGAffineTransform(translationX: Self.duplicateOffset, y: Self.duplicateOffset)
-        let copies = transformedCopies(of: selection.strokes, by: offset, widthScale: 1, keepDepth: false)
-        document.apply(NoteDocument.StrokeChange(added: copies))
-        setSelection(copies)
-        presentMenu()
-    }
-
-    private func deleteSelection() {
-        guard let selection else { return }
-        document.apply(NoteDocument.StrokeChange(removed: selection.strokes))
-        clearSelection()
-    }
-
-    private func cutSelection() {
-        copySelection()
-        deleteSelection()
-    }
-
-    /// Copies the selection as ink (for pasting in this app), positioned relative to its box.
-    private func copySelection() {
-        guard let selection else { return }
-        let offset = CGAffineTransform(translationX: -selection.box.minX, y: -selection.box.minY)
-        let strokes = selection.strokes.map { placed in
-            let origin = pageOrigin(placed.pageID)
-            return placed.stroke.transformed(CGAffineTransform(translationX: origin.x, y: origin.y).concatenating(offset))
-        }
-        if let data = try? InkCodec.encode(DeviceInk(strokes: strokes)) {
-            UIPasteboard.general.setData(data, forPasteboardType: Self.inkPasteboardType)
-        }
-    }
-
-    /// Pastes copied ink centered where the menu was opened (or next to the selection).
-    private func paste() {
-        guard let data = UIPasteboard.general.data(forPasteboardType: Self.inkPasteboardType),
-              let ink = try? InkCodec.decode(data), !ink.strokes.isEmpty else { return }
-        let box = ink.strokes.reduce(CGRect.null) { $0.union($1.bounds) }
-        let target: CGPoint
-        if let menuPoint {
-            target = menuPoint
-        } else if let selection {
-            target = CGPoint(x: selection.box.midX + Self.duplicateOffset, y: selection.box.midY + Self.duplicateOffset)
-        } else {
-            return
-        }
-        let move = CGAffineTransform(translationX: target.x - box.midX, y: target.y - box.midY)
-        let now = Date()
-        let pasted = ink.strokes.flatMap { stroke -> [NoteDocument.PlacedStroke] in
-            let moved = stroke.transformed(move)
-            return place(moved.points, tool: moved.tool, color: moved.color, createdAt: now)
-        }
-        document.apply(NoteDocument.StrokeChange(added: pasted))
-        setSelection(pasted)
-        presentMenu()
-    }
-
-    /// Copies the selection as a picture, for pasting into other apps.
-    private func copySelectionAsImage() {
-        guard let selection else { return }
-        let box = selection.box.insetBy(dx: -4, dy: -4)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 3
-        format.opaque = false
-        let image = UIGraphicsImageRenderer(size: box.size, format: format).image { context in
-            let cg = context.cgContext
-            cg.translateBy(x: -box.minX, y: -box.minY)
-            let clip = CGRect(origin: .zero, size: .init(width: 10_000, height: 10_000))
-            for pageID in Set(selection.strokes.map(\.pageID)) {
-                let origin = pageOrigin(pageID)
-                let strokes = selection.strokes.filter { $0.pageID == pageID }.map { rendered($0.stroke) }
-                cg.saveGState()
-                cg.translateBy(x: origin.x, y: origin.y)
-                PageRenderer.drawHighlights(strokes, in: cg, clip: clip)
-                PageRenderer.drawInk(strokes, paper: .whiteLined, in: cg, clip: clip)
-                cg.restoreGState()
-            }
-        }
-        UIPasteboard.general.image = image
-    }
-
     // MARK: - Handing finished strokes from the live ink to the pages
 
     /// Keeps the live ink's copy of a finished stroke until the page tiles that show it have redrawn.
-    private func waitForTiles(_ handoffID: UUID, toShow pieces: [NoteDocument.PlacedStroke]) {
+    func waitForTiles(_ handoffID: UUID, toShow pieces: [NoteDocument.PlacedStroke]) {
         var waits: [PendingHandoff.Key: PendingHandoff.Wait] = [:]
         for piece in pieces {
             guard let view = pageViews[piece.pageID] else { continue }
@@ -1152,7 +781,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         }
     }
 
-    private func tileDidDraw(onPage pageID: UUID, isInk: Bool, rect: CGRect, version: Int) {
+    func tileDidDraw(onPage pageID: UUID, isInk: Bool, rect: CGRect, version: Int) {
         // The live ink gives up on its own after a moment; forget those.
         pendingHandoffs.removeAll { Date().timeIntervalSince($0.startedAt) > 1 }
         let key = PendingHandoff.Key(pageID: pageID, isInk: isInk)
@@ -1173,7 +802,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         }
     }
 
-    private static func isCovered(_ area: CGRect, by tiles: [CGRect]) -> Bool {
+    static func isCovered(_ area: CGRect, by tiles: [CGRect]) -> Bool {
         // Tiles end on whole pixels, so they can stop a fraction of a point short of a page edge
         // that isn't. Ignore a point-wide border (or, for a tiny dot, check its center).
         let area = area.width > 2 && area.height > 2
@@ -1196,14 +825,14 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
 
     // MARK: - Gestures
 
-    private func configureTouchTypes() {
+    func configureTouchTypes() {
         let pencil = NSNumber(value: UITouch.TouchType.pencil.rawValue)
         let finger = NSNumber(value: UITouch.TouchType.direct.rawValue)
         strokeRecognizer.allowedTouchTypes = drawsWithFinger ? [pencil, finger] : [pencil]
         scrollView.panGestureRecognizer.allowedTouchTypes = [finger]
         scrollView.panGestureRecognizer.minimumNumberOfTouches = drawsWithFinger ? 2 : 1
         // With finger drawing on, one finger already works the select tool through the stroke recognizer.
-        let fingerSelects = tool == .select && !drawsWithFinger
+        let fingerSelects = (tool == .select || cropping != nil) && !drawsWithFinger
         selectionPan.isEnabled = fingerSelects
         selectionTap.isEnabled = fingerSelects
     }
@@ -1227,6 +856,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             return activeStroke == nil && manipulation == nil
         }
         if gestureRecognizer === selectionPan {
+            if cropping != nil { return true }
             return selectionGrab(at: gestureRecognizer.location(in: contentView)) != nil
         }
         return super.gestureRecognizerShouldBegin(gestureRecognizer)
@@ -1263,7 +893,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         }
     }
 
-    private func showColorPickerForCurrentTool() {
+    func showColorPickerForCurrentTool() {
         if tool != .pen && tool != .highlighter {
             settings.tool = .pen
         }
@@ -1283,8 +913,8 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     // MARK: - Debugging in the Simulator
 
     #if DEBUG
-    private var debugStep = 0
-    private var debugStrokeOrigin = CGPoint.zero
+    var debugStep = 0
+    var debugStrokeOrigin = CGPoint.zero
 
     /// Launch arguments (with `-OpenFirstNote`) for checking things in the Simulator, which has no Pencil:
     /// - `-DebugLiveStroke`: replays a synthetic pen stroke through the live-drawing path. It
@@ -1292,12 +922,16 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     /// - `-DebugUndoAfterStroke`: undoes it 2 seconds later.
     /// - `-DebugTools`: replays a highlight, a snapped circle, then a whole-stroke erase and a lasso.
     /// - `-DebugZoom 2`: zooms in first.
-    private func startDebugScenarioIfRequested() {
+    func startDebugScenarioIfRequested() {
         let zoom = UserDefaults.standard.double(forKey: "DebugZoom")
         if zoom > 0 {
             scrollView.zoomScale = widthFitZoom * zoom
         }
         let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-DebugItems") {
+            runDebugItemsScenario()
+            return
+        }
         guard arguments.contains("-DebugLiveStroke") || arguments.contains("-DebugTools"),
               let page = document.pages.first, let pageView = pageViews[page.id] else { return }
         if arguments.contains("-DebugLiveStroke") {
@@ -1312,7 +946,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         CADisplayLink(target: self, selector: #selector(stepDebugScenario(_:))).add(to: .main, forMode: .common)
     }
 
-    private func debugStroke(tool: InkTool) -> ActiveStroke? {
+    func debugStroke(tool: InkTool) -> ActiveStroke? {
         guard let page = document.pages.first, let pageView = pageViews[page.id] else { return nil }
         let presets = tool == .highlighter ? settings.highlighter : settings.pen
         return ActiveStroke(pageID: page.id, pageView: pageView, tool: tool,
@@ -1413,7 +1047,7 @@ extension ToolPresets {
 }
 
 /// Scroll view that won't start scrolling while the Pencil is writing or a selection is grabbed.
-private final class CanvasScrollView: UIScrollView {
+final class CanvasScrollView: UIScrollView {
     /// Given where a pan starts (in the scroll view), whether it should not scroll.
     var blocksPanning: (CGPoint) -> Bool = { _ in false }
 

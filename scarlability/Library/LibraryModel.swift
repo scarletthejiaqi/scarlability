@@ -128,10 +128,22 @@ final class LibraryModel {
         Self.thumbnailQueue.async {
             let page = folder.loadFirstPage(inNoteAt: url)
             let strokes = page.map { InkMerge.visibleStrokes(from: $0.inks.values) } ?? []
+            func picture(_ fileName: String) -> CGImage? {
+                folder.loadImageData(named: fileName, inNoteAt: url).flatMap { ImageLoading.cgImage(from: $0, maxPixelSize: 600) }
+            }
+            let items = (page.map { ItemMerge.visibleItems(from: $0.items.values) } ?? []).map { item in
+                RenderedItem(item, image: item.image.flatMap { picture($0.fileName) })
+            }
+            var background: CGImage?
+            if case .image(let fileName)? = page?.record.background {
+                background = picture(fileName)
+            }
             let content = PageContent(
                 paper: page?.record.paper ?? record.defaultPaper,
                 size: page?.record.size ?? record.defaultPageSize,
-                strokes: strokes.map(RenderedStroke.init)
+                strokes: strokes.map(RenderedStroke.init),
+                items: items,
+                backgroundImage: background
             )
             let image = Thumbnail.render(content, width: Self.thumbnailWidth, scale: 2)
             Task { @MainActor [weak self] in

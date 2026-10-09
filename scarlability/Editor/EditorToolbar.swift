@@ -7,6 +7,7 @@ import UIKit
 struct EditorToolbar: View {
     let document: NoteDocument
     @Bindable var settings: ToolSettings
+    let session: EditorSession
     @Environment(AppModel.self) private var model
 
     @State private var swatchFrames: [Int: CGRect] = [:]
@@ -24,6 +25,8 @@ struct EditorToolbar: View {
                 ToolButton(title: "Highlighter", systemImage: "highlighter", tool: .highlighter, settings: settings)
                 ToolButton(title: "Eraser", systemImage: "eraser", tool: .eraser, settings: settings)
                 ToolButton(title: "Select", systemImage: "lasso", tool: .select, settings: settings)
+                ToolButton(title: "Text", systemImage: "textformat", tool: .text, settings: settings)
+                imageMenu
             }
             HStack(spacing: 14) {
                 toolOptions
@@ -114,6 +117,8 @@ struct EditorToolbar: View {
             presetOptions(\.pen, sizeRange: ToolSettings.penSizeRange)
         case .highlighter:
             presetOptions(\.highlighter, sizeRange: ToolSettings.highlighterSizeRange)
+        case .text:
+            textOptions
         case .eraser:
             Picker("Eraser", selection: $settings.eraserMode) {
                 Text("Whole Stroke").tag(EraserMode.wholeStroke)
@@ -149,19 +154,88 @@ struct EditorToolbar: View {
         }
     }
 
-    /// Color presets, the extra color slot and size presets for the pen or highlighter.
+    private var imageMenu: some View {
+        Menu {
+            Button("Photos", systemImage: "photo.on.rectangle") { session.send(.insertImage(.photos)) }
+            Button("Take Photo", systemImage: "camera") { session.send(.insertImage(.camera)) }
+            Button("Scan Document", systemImage: "doc.viewfinder") { session.send(.insertImage(.scanner)) }
+            Button("Files", systemImage: "folder") { session.send(.insertImage(.files)) }
+            Button("Paste", systemImage: "doc.on.clipboard") { session.send(.insertImage(.paste)) }
+        } label: {
+            Label("Image", systemImage: "photo")
+                .font(.subheadline.weight(.medium))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .foregroundStyle(.primary)
+        }
+        .accessibilityLabel("Insert image")
+    }
+
+    /// Font, size, colors, bold/italic/underline and lists. Changes apply to what's selected
+    /// while typing, and become the style for new text boxes.
     @ViewBuilder
-    private func presetOptions(_ tool: ReferenceWritableKeyPath<ToolSettings, ToolPresets>, sizeRange: ClosedRange<Double>) -> some View {
+    private var textOptions: some View {
+        let style = session.isEditingText ? session.currentStyle : settings.textStyle
+        Menu {
+            ForEach(TextFont.allCases, id: \.self) { font in
+                Button {
+                    settings.textFont = font
+                    session.send(.font(font))
+                } label: {
+                    Label(font.displayName, systemImage: style.font == font ? "checkmark" : "")
+                }
+            }
+        } label: {
+            Text(style.font.displayName).font(.subheadline.weight(.medium)).frame(minWidth: 90)
+        }
+        Menu {
+            ForEach(ToolSettings.textSizes, id: \.self) { size in
+                Button {
+                    settings.textSize = size
+                    session.send(.size(size))
+                } label: {
+                    Label("\(Int(size)) pt", systemImage: style.size == size ? "checkmark" : "")
+                }
+            }
+        } label: {
+            Text("\(Int(style.size)) pt").font(.subheadline.monospacedDigit()).frame(minWidth: 44)
+        }
+        Divider().frame(height: 26)
+        presetOptions(\.text, sizeRange: nil) { color in session.send(.color(color)) }
+        Divider().frame(height: 26)
+        Group {
+            StyleButton(systemImage: "bold", isOn: style.bold) { session.send(.bold) }
+            StyleButton(systemImage: "italic", isOn: style.italic) { session.send(.italic) }
+            StyleButton(systemImage: "underline", isOn: style.underline) { session.send(.underline) }
+            StyleButton(systemImage: "list.bullet", isOn: false) { session.send(.bullets) }
+            StyleButton(systemImage: "list.number", isOn: false) { session.send(.numbers) }
+        }
+        .disabled(!session.isEditingText)
+    }
+
+    /// Color presets and the extra color slot, then (with `sizeRange`) size presets, for the
+    /// pen, highlighter or text. `onColor` hears about colors picked.
+    @ViewBuilder
+    private func presetOptions(_ tool: ReferenceWritableKeyPath<ToolSettings, ToolPresets>, sizeRange: ClosedRange<Double>?,
+                               onColor: ((InkColor) -> Void)? = nil) -> some View {
         let presets = settings[keyPath: tool]
         ForEach(presets.colors.indices, id: \.self) { slot in
             ColorSwatch(color: presets.colors[slot], isSelected: presets.selectedColorSlot == slot)
-                .onTapGesture { tapColor(slot, of: tool) }
+                .onTapGesture { tapColor(slot, of: tool, onColor: onColor) }
                 .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { swatchFrames[slot] = $0 }
         }
         ExtraColorSwatch(color: presets.extraColor, isSelected: presets.selectedColorSlot == presets.extraColorSlot)
-            .onTapGesture { tapColor(presets.extraColorSlot, of: tool) }
+            .onTapGesture { tapColor(presets.extraColorSlot, of: tool, onColor: onColor) }
             .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { swatchFrames[presets.extraColorSlot] = $0 }
 
+        if let sizeRange {
+            sizeOptions(tool, sizeRange: sizeRange)
+        }
+    }
+
+    @ViewBuilder
+    private func sizeOptions(_ tool: ReferenceWritableKeyPath<ToolSettings, ToolPresets>, sizeRange: ClosedRange<Double>) -> some View {
+        let presets = settings[keyPath: tool]
         Divider().frame(height: 26)
 
         ForEach(0..<ToolSettings.sizeCount, id: \.self) { slot in
@@ -185,12 +259,13 @@ struct EditorToolbar: View {
     }
 
     /// Tapping a color selects it; tapping the selected color again opens the color picker for it.
-    private func tapColor(_ slot: Int, of tool: ReferenceWritableKeyPath<ToolSettings, ToolPresets>) {
+    private func tapColor(_ slot: Int, of tool: ReferenceWritableKeyPath<ToolSettings, ToolPresets>, onColor: ((InkColor) -> Void)?) {
         let presets = settings[keyPath: tool]
         let isExtra = slot == presets.extraColorSlot
         let alreadySelected = presets.selectedColorSlot == slot
         guard alreadySelected || (isExtra && presets.extraColor == nil) else {
             settings[keyPath: tool].selectedColorSlot = slot
+            onColor?(settings[keyPath: tool].currentColor)
             return
         }
         let current = isExtra ? (presets.extraColor ?? presets.currentColor) : presets.colors[slot]
@@ -201,6 +276,7 @@ struct EditorToolbar: View {
                 settings[keyPath: tool].colors[slot] = color
             }
             settings[keyPath: tool].selectedColorSlot = slot
+            onColor?(color)
         }
     }
 
@@ -209,6 +285,20 @@ struct EditorToolbar: View {
             get: { editingSizeSlot == slot },
             set: { if !$0 { editingSizeSlot = nil } }
         )
+    }
+}
+
+private struct StyleButton: View {
+    let systemImage: String
+    let isOn: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .frame(width: 30, height: 30)
+                .background(isOn ? Color.accentColor.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 6))
+        }
     }
 }
 

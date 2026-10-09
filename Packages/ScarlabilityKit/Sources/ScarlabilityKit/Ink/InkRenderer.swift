@@ -18,28 +18,37 @@ public struct RenderedStroke: @unchecked Sendable {
 }
 
 /// Everything one page shows.
-public struct PageContent: Sendable {
+public struct PageContent: @unchecked Sendable {
+    // The CGImage is immutable, so sharing it between threads is safe.
     public var paper: PaperStyle
     public var size: CGSize
     /// Oldest first.
     public var strokes: [RenderedStroke]
+    /// Text boxes and images, oldest first.
+    public var items: [RenderedItem]
+    /// A picture filling the page under everything (a scanned document).
+    public var backgroundImage: CGImage?
     /// A thin line along the bottom edge, separating this page from the next one on screen.
     public var bottomEdgeColor: InkColor?
 
-    public init(paper: PaperStyle, size: CGSize, strokes: [RenderedStroke], bottomEdgeColor: InkColor? = nil) {
+    public init(paper: PaperStyle, size: CGSize, strokes: [RenderedStroke], items: [RenderedItem] = [],
+                backgroundImage: CGImage? = nil, bottomEdgeColor: InkColor? = nil) {
         self.paper = paper
         self.size = size
         self.strokes = strokes
+        self.items = items
+        self.backgroundImage = backgroundImage
         self.bottomEdgeColor = bottomEdgeColor
     }
 }
 
-/// Draws a page in layers: paper, then highlights, then pen ink on top. The canvas draws the
-/// first two and the ink in separate tiled layers, so the live highlighter can slide between them
-/// and look exactly like the finished one (behind the writing).
+/// Draws a page in layers: paper (and a scanned background), then images and typed text, then
+/// highlights, then pen ink on top, so you can write and highlight over text and pictures. The
+/// canvas draws everything but the ink in one tiled layer and the ink in another, so the live
+/// highlighter can slide between them and look exactly like the finished one.
 public enum PageRenderer {
     public enum Layer: Sendable {
-        /// Paper, the page edge line and highlights.
+        /// Paper, background, page edge line, images, text and highlights.
         case background
         /// Pen ink.
         case ink
@@ -55,11 +64,17 @@ public enum PageRenderer {
     public static func draw(_ content: PageContent, layer: Layer, in context: CGContext, clip: CGRect) {
         if layer != .ink {
             PaperRenderer.draw(content.paper, pageSize: content.size, in: context, clip: clip)
+            if let background = content.backgroundImage {
+                let page = CGRect(origin: .zero, size: content.size)
+                ItemRenderer.drawImage(background, in: ItemRenderer.aspectFit(CGSize(width: background.width, height: background.height), in: page),
+                                       context: context)
+            }
             if let edge = content.bottomEdgeColor {
                 // Under the ink, so writing that crosses onto the next page covers it.
                 context.setFillColor(edge.cgColor)
                 context.fill(CGRect(x: 0, y: content.size.height - 0.75, width: content.size.width, height: 0.75))
             }
+            ItemRenderer.draw(content.items, paper: content.paper, in: context, clip: clip)
             drawHighlights(content.strokes, in: context, clip: clip)
         }
         if layer != .background {

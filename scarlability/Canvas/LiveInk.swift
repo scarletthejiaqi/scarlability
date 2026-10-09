@@ -123,10 +123,11 @@ final class LiveInk {
         }
     }
 
-    /// Shows strokes being moved, resized or rotated, in content coordinates.
-    func showPreview(_ items: [Item]) {
+    /// Shows strokes (in content coordinates) and text boxes/images (each with the transform
+    /// from its page into content coordinates) being moved, resized or rotated.
+    func showPreview(_ items: [Item], objects: [(RenderedItem, CGAffineTransform)] = []) {
         preview.configure(writingArea: writingArea, rasterScale: rasterScale, hostOrigin: .zero)
-        preview.show(items, growing: false)
+        preview.show(items, objects: objects, growing: false)
     }
 
     func clearPreview() {
@@ -230,6 +231,8 @@ private final class StrokeInkLayer: CALayer {
     /// Where this layer's parent sits, in content coordinates.
     private var hostOrigin: CGPoint = .zero
     private var items: [LiveInk.Item] = []
+    /// Text boxes and images, drawn under the strokes.
+    private var objects: [(RenderedItem, CGAffineTransform)] = []
 
     override init() {
         super.init()
@@ -257,15 +260,19 @@ private final class StrokeInkLayer: CALayer {
 
     /// - Parameter growing: Keep the layer at least as big as before. While a stroke grows, that
     ///   saves reallocating the backing image on every frame.
-    func show(_ items: [LiveInk.Item], growing: Bool) {
+    func show(_ items: [LiveInk.Item], objects: [(RenderedItem, CGAffineTransform)] = [], growing: Bool) {
         self.items = items
-        guard let first = items.first else {
+        self.objects = objects
+        guard !items.isEmpty || !objects.isEmpty else {
             clear()
             return
         }
         var area = CGRect.null
         for item in items {
             area = area.union(item.path.boundingBoxOfPath.offsetBy(dx: item.pageOrigin.x, dy: item.pageOrigin.y))
+        }
+        for (object, transform) in objects {
+            area = area.union(object.item.bounds.applying(transform))
         }
         area = area.insetBy(dx: -2, dy: -2).intersection(writingArea)
         guard !area.isNull, !area.isEmpty else {
@@ -276,7 +283,7 @@ private final class StrokeInkLayer: CALayer {
             area = area.union(frame.offsetBy(dx: hostOrigin.x, dy: hostOrigin.y))
         }
         // Snap to the pixel grid of the first item's page, which is where that page's tiles are.
-        let scale = rasterScale, grid = first.pageOrigin
+        let scale = rasterScale, grid = items.first?.pageOrigin ?? .zero
         func snapDown(_ value: CGFloat, _ origin: CGFloat) -> CGFloat { origin + floor((value - origin) * scale) / scale }
         func snapUp(_ value: CGFloat, _ origin: CGFloat) -> CGFloat { origin + ceil((value - origin) * scale) / scale }
         let minX = snapDown(area.minX, grid.x), minY = snapDown(area.minY, grid.y)
@@ -290,6 +297,7 @@ private final class StrokeInkLayer: CALayer {
 
     func clear() {
         items = []
+        objects = []
         isHidden = true
         frame = .zero
     }
@@ -298,6 +306,12 @@ private final class StrokeInkLayer: CALayer {
         // Work in content coordinates.
         context.translateBy(x: -frame.minX - hostOrigin.x, y: -frame.minY - hostOrigin.y)
         context.clip(to: writingArea)
+        for (object, transform) in objects {
+            context.saveGState()
+            context.concatenate(transform)
+            ItemRenderer.draw(object, paper: nil, in: context)
+            context.restoreGState()
+        }
         // Live highlighter layers are see-through themselves; anywhere else, highlights are drawn
         // at their opacity, behind the ink.
         let highlights = items.filter { $0.tool == .highlighter }
