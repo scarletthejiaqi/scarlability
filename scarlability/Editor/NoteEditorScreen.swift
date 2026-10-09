@@ -7,9 +7,9 @@ struct NoteEditorScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            EditorToolbar(document: document, settings: model.penSettings)
+            EditorToolbar(document: document, settings: model.toolSettings)
             Divider()
-            NoteCanvas(document: document, settings: model.penSettings)
+            NoteCanvas(document: document, settings: model.toolSettings)
                 .id(ObjectIdentifier(document))
                 .ignoresSafeArea(edges: .bottom)
         }

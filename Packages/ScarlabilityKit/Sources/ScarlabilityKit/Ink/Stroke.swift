@@ -24,6 +24,8 @@ public struct InkPoint: Hashable, Sendable {
 
 public enum InkTool: UInt8, Sendable, Codable {
     case pen = 0
+    /// Semi-transparent, flat chisel tip, always drawn behind pen ink.
+    case highlighter = 1
 }
 
 /// A finished stroke. Strokes never change after they're created; editing one replaces it,
@@ -57,5 +59,20 @@ public struct Stroke: Identifiable, Hashable, Sendable {
             maxY = max(maxY, point.y + r)
         }
         return CGRect(x: CGFloat(minX), y: CGFloat(minY), width: CGFloat(maxX - minX), height: CGFloat(maxY - minY))
+    }
+}
+
+extension Stroke {
+    /// A copy with a new ID, for edits: a stroke never changes once created, it gets replaced.
+    /// Keeps `createdAt`, so the copy stays at the same depth among other strokes.
+    public func replacement(points: [InkPoint]? = nil, color: InkColor? = nil) -> Stroke {
+        Stroke(tool: tool, color: color ?? self.color, points: points ?? self.points, createdAt: createdAt)
+    }
+
+    /// A moved/resized/rotated copy with a new ID. Widths are multiplied by `widthScale`.
+    public func transformed(_ transform: CGAffineTransform, widthScale: CGFloat = 1) -> Stroke {
+        replacement(points: points.map { point in
+            InkPoint(point.location.applying(transform), width: Double(CGFloat(point.width) * widthScale))
+        })
     }
 }

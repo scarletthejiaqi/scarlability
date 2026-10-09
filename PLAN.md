@@ -1,4 +1,4 @@
-# Scarlability — Build Plan (v5: M1 rebuilt after your first test)
+# Scarlability — Build Plan (v6: M2 built; all testing at the end, see TESTING.md)
 
 A note-taking app for **iPad + Mac** that copies the *basic* parts of Notability:
 1. Notability-style tools: pressure pen, highlighter, eraser, text, selection, shape snap
@@ -142,7 +142,7 @@ iCloud Drive/Scarlability/          ← made inside the place you pick
 |---|---|---|
 | ~~M0~~ | *Folded into M1 at your request.* | |
 | **M1** ✅ built | Setup (iPad + Mac only, read-write folder access, shared engine package + tests) plus the ink core on iPad: pressure pen + pressure curve, 3 colors + extra color, 3 sizes with sliders, top toolbar, Pencil-only + finger scroll/zoom, undo/redo (buttons + 2/3-finger taps), continuous pages with an automatic blank last page, saving to the iCloud folder | Write on your iPad and compare the feel with Notability. **We'll spend the most time here tuning pressure and smoothing.** |
-| **M2** | Tools: highlighter, eraser modes, select (freeform + box), shape snap, double-tap, paper templates | Use every drawing tool |
+| **M2** ✅ built | Highlighter (flat chisel, behind ink, even color, yellow + extra color), eraser (whole stroke by default, partial, highlighter only), select (freeform + box; floating menu with Cut/Copy/Paste/Duplicate/Color/Thickness/Copy as Image/Delete; move, resize, rotate), shape snap (hold 0.5 s), Pencil double-tap, paper (Blank/Lined with 3 spacings; White/Cream/Gray/Dark; whole note or this page) | Use every drawing tool |
 | **M3** | Library: dividers, subjects, unfiled, thumbnails, sort, search, drag & drop, multi-select, delete/restore | Organize notes like in Notability |
 | **M4** | Text and images: text tool with formatting and lists, images from Photos/Files/camera/scanner, paste, move/resize | Type and add pictures |
 | **M5** | PDF: import (new note or into a note), annotate, text-snap highlighter toggle, all export options | Annotate lecture slides and export them |
@@ -214,6 +214,9 @@ iCloud Drive/Scarlability/          ← made inside the place you pick
 10. **Color picker:** it's Apple's standard picker (spectrum / grid / sliders + eyedropper). Do you want a round color wheel instead?
 11. **Zoom lock strength:** you have to pinch about 7% past a lock to leave it. Too sticky, or not sticky enough?
 12. **Smoothing strength:** is the new smoothing too much (letters look rounded) or too little (still bumpy)?
+
+- M2: decided up front: see `TESTING.md` §5–10 for what was built, and §11 for the questions I picked defaults for.
+- M3: sidebar (All Notes, Unfiled, Dividers ▸ Subjects, Recently Deleted) plus notes on the right; new notes named "Note Oct 9, 2026 4:30 PM"; thumbnail grid; Recently Deleted keeps notes 30 days.
 
 **Asked when we reach that milestone**
 - M1: which preset colors and sizes, and how many of each? Pressure sensitivity slider in Settings, or one fixed Notability-like feel?

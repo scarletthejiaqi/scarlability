@@ -1,22 +1,13 @@
 import QuartzCore
 import Synchronization
 
-/// Draws one page (paper + finished ink) in tiles on background threads, so the page stays sharp
-/// at any zoom without needing one huge bitmap.
+/// Draws one layer of a page (see `PageRenderer.Layer`) in tiles on background threads, so the
+/// page stays sharp at any zoom without needing one huge bitmap.
 public final class PageTileLayer: CATiledLayer {
-    public struct Content: Sendable {
-        public var paper: PaperStyle
-        public var size: CGSize
-        public var strokes: [RenderedStroke]
-        /// A thin line along the bottom edge, separating this page from the next one on screen.
-        public var bottomEdgeColor: InkColor?
-
-        public init(paper: PaperStyle, size: CGSize, strokes: [RenderedStroke], bottomEdgeColor: InkColor? = nil) {
-            self.paper = paper
-            self.size = size
-            self.strokes = strokes
-            self.bottomEdgeColor = bottomEdgeColor
-        }
+    /// Which part of the page this layer draws. Set it before content.
+    public var role: PageRenderer.Layer {
+        get { state.withLock { $0.role } }
+        set { state.withLock { $0.role = newValue } }
     }
 
     /// Called (on a background thread) after each tile is drawn, with the tile's rect in page
@@ -24,7 +15,8 @@ public final class PageTileLayer: CATiledLayer {
     public typealias TileDrawnHandler = @Sendable (_ rect: CGRect, _ version: Int) -> Void
 
     private struct State {
-        var content: Content?
+        var role: PageRenderer.Layer = .all
+        var content: PageContent?
         var version = 0
         var onTileDrawn: TileDrawnHandler?
     }
@@ -62,7 +54,7 @@ public final class PageTileLayer: CATiledLayer {
     }
 
     /// Replaces what the page shows. Pass the changed area to redraw only those tiles.
-    public func setContent(_ newContent: Content, changedRect: CGRect? = nil) {
+    public func setContent(_ newContent: PageContent, changedRect: CGRect? = nil) {
         state.withLock {
             $0.content = newContent
             $0.version += 1
@@ -75,7 +67,7 @@ public final class PageTileLayer: CATiledLayer {
     }
 
     override public func draw(in context: CGContext) {
-        let (content, version, onTileDrawn) = state.withLock { ($0.content, $0.version, $0.onTileDrawn) }
+        let (role, content, version, onTileDrawn) = state.withLock { ($0.role, $0.content, $0.version, $0.onTileDrawn) }
         guard let content else { return }
         let clip = context.boundingBoxOfClipPath
         #if os(macOS)
@@ -86,13 +78,7 @@ public final class PageTileLayer: CATiledLayer {
         #else
         let pageClip = clip
         #endif
-        PaperRenderer.draw(content.paper, pageSize: content.size, in: context, clip: pageClip)
-        if let edge = content.bottomEdgeColor {
-            // Under the ink, so writing that crosses onto the next page covers it.
-            context.setFillColor(edge.cgColor)
-            context.fill(CGRect(x: 0, y: content.size.height - 0.75, width: content.size.width, height: 0.75))
-        }
-        InkRenderer.draw(content.strokes, in: context, clip: pageClip)
+        PageRenderer.draw(content, layer: role, in: context, clip: pageClip)
         onTileDrawn?(pageClip, version)
     }
 }

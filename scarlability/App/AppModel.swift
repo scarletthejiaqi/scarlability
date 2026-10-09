@@ -13,7 +13,7 @@ final class AppModel {
     }
 
     private(set) var state: State = .needsFolder
-    let penSettings = PenSettings()
+    let toolSettings = ToolSettings()
     var folderName: String? { folderAccess?.displayName }
 
     private var folderAccess: FolderAccess?

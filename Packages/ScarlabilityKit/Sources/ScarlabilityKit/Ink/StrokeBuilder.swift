@@ -73,7 +73,7 @@ public struct StrokeBuilder: Sendable {
 }
 
 extension CGPoint {
-    func distance(to other: CGPoint) -> CGFloat {
+    public func distance(to other: CGPoint) -> CGFloat {
         hypot(x - other.x, y - other.y)
     }
 }

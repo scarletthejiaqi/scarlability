@@ -38,6 +38,8 @@ final class NoteDocument {
     enum Change {
         case pagesChanged
         case inkChanged(pageID: UUID, area: CGRect)
+        /// The page's paper changed; redraw all of it.
+        case pageRedraw(pageID: UUID)
     }
 
     /// A stroke (or one piece of a stroke that crossed onto another page) and its page.
@@ -46,9 +48,39 @@ final class NoteDocument {
         var pageID: UUID
     }
 
-    private enum Edit {
-        /// One pen stroke, which may have been split across pages.
-        case addStrokes([PlacedStroke])
+    /// Strokes to remove and strokes to add, as one undoable step. Every edit is one of these:
+    /// writing adds, erasing removes (and adds the leftover pieces), moving/recoloring removes
+    /// the originals and adds changed copies.
+    struct StrokeChange {
+        var removed: [PlacedStroke] = []
+        var added: [PlacedStroke] = []
+    }
+
+    /// A change as it was applied, with what's needed to undo it.
+    private struct AppliedChange {
+        struct Removal {
+            var placed: PlacedStroke
+            /// This device's own stroke (deleted from its ink), or another device's (marked erased).
+            var wasOwn: Bool
+        }
+
+        var added: [PlacedStroke] = []
+        var removed: [Removal] = []
+
+        var isEmpty: Bool { added.isEmpty && removed.isEmpty }
+
+        /// Folds a later change into this one, so a whole eraser swipe undoes in one step.
+        mutating func merge(_ later: AppliedChange) {
+            for removal in later.removed {
+                if let index = added.firstIndex(where: { $0.stroke.id == removal.placed.stroke.id }) {
+                    // Added and removed within the group: it never existed before or after.
+                    added.remove(at: index)
+                } else {
+                    removed.append(removal)
+                }
+            }
+            added += later.added
+        }
     }
 
     private(set) var note: NoteRecord
@@ -57,7 +89,11 @@ final class NoteDocument {
     private(set) var pages: [Page]
     /// Set when writing to the notes folder fails; cleared by the next successful save.
     private(set) var saveFailed = false
-    private var history = UndoHistory<Edit>()
+    private var history = UndoHistory<AppliedChange>()
+    /// Changes applied since `beginGroup()`, recorded as one undo step by `endGroup()`.
+    @ObservationIgnored private var openGroup: AppliedChange?
+    /// The page in the middle of the screen; set by the canvas. Paper changes for "this page" use it.
+    @ObservationIgnored var visiblePageID: UUID?
 
     var canUndo: Bool { history.canUndo }
     var canRedo: Bool { history.canRedo }
@@ -117,42 +153,134 @@ final class NoteDocument {
 
     /// Adds one pen stroke: a single piece, or one piece per page if it crossed a page edge.
     func addStroke(_ pieces: [PlacedStroke]) {
-        guard !pieces.isEmpty else { return }
-        let edit = Edit.addStrokes(pieces)
-        apply(edit, reversed: false)
-        history.record(edit)
+        apply(StrokeChange(added: pieces))
+    }
+
+    /// Applies a change and records it for undo (as part of the open group, if any).
+    func apply(_ change: StrokeChange) {
+        var applied = AppliedChange()
+        var touched: [UUID: CGRect] = [:]
+        for placed in change.removed {
+            // Only strokes the page still shows can be removed (a stale selection might hold others).
+            guard let index = pageIndex(placed.pageID),
+                  pages[index].visibleStrokes.contains(where: { $0.id == placed.stroke.id }) else { continue }
+            let wasOwn = pages[index].ownInk.strokes.contains { $0.id == placed.stroke.id }
+            remove(placed.stroke.id, wasOwn: wasOwn, fromPageAt: index)
+            applied.removed.append(.init(placed: placed, wasOwn: wasOwn))
+            touched[placed.pageID, default: .null] = touched[placed.pageID, default: .null].union(placed.stroke.bounds)
+        }
+        for placed in change.added {
+            guard let index = pageIndex(placed.pageID) else { continue }
+            pages[index].ownInk.strokes.append(placed.stroke)
+            applied.added.append(placed)
+            touched[placed.pageID, default: .null] = touched[placed.pageID, default: .null].union(placed.stroke.bounds)
+        }
+        guard !applied.isEmpty else { return }
+        finish(touched)
+        if openGroup != nil {
+            openGroup?.merge(applied)
+        } else {
+            history.record(applied)
+        }
+    }
+
+    /// Starts collecting changes into one undo step (e.g. for an eraser swipe).
+    func beginGroup() {
+        openGroup = AppliedChange()
+    }
+
+    func endGroup() {
+        if let group = openGroup, !group.isEmpty {
+            history.record(group)
+        }
+        openGroup = nil
     }
 
     func undo() {
-        if let edit = history.popUndo() {
-            apply(edit, reversed: true)
+        guard openGroup == nil, let change = history.popUndo() else { return }
+        var touched: [UUID: CGRect] = [:]
+        for placed in change.added {
+            guard let index = pageIndex(placed.pageID) else { continue }
+            remove(placed.stroke.id, wasOwn: true, fromPageAt: index)
+            touched[placed.pageID, default: .null] = touched[placed.pageID, default: .null].union(placed.stroke.bounds)
         }
+        for removal in change.removed {
+            guard let index = pageIndex(removal.placed.pageID) else { continue }
+            if removal.wasOwn {
+                pages[index].ownInk.strokes.append(removal.placed.stroke)
+            } else {
+                pages[index].ownInk.erasedStrokeIDs.remove(removal.placed.stroke.id)
+            }
+            touched[removal.placed.pageID, default: .null] = touched[removal.placed.pageID, default: .null].union(removal.placed.stroke.bounds)
+        }
+        finish(touched)
     }
 
     func redo() {
-        if let edit = history.popRedo() {
-            apply(edit, reversed: false)
+        guard openGroup == nil, let change = history.popRedo() else { return }
+        var touched: [UUID: CGRect] = [:]
+        for removal in change.removed {
+            guard let index = pageIndex(removal.placed.pageID) else { continue }
+            remove(removal.placed.stroke.id, wasOwn: removal.wasOwn, fromPageAt: index)
+            touched[removal.placed.pageID, default: .null] = touched[removal.placed.pageID, default: .null].union(removal.placed.stroke.bounds)
+        }
+        for placed in change.added {
+            guard let index = pageIndex(placed.pageID) else { continue }
+            pages[index].ownInk.strokes.append(placed.stroke)
+            touched[placed.pageID, default: .null] = touched[placed.pageID, default: .null].union(placed.stroke.bounds)
+        }
+        finish(touched)
+    }
+
+    /// Changes the paper of the whole note (and pages added later), or of one page.
+    func setPaper(_ paper: PaperStyle, onlyPage pageID: UUID? = nil) {
+        if let pageID {
+            guard let index = pageIndex(pageID) else { return }
+            pages[index].record.paper = paper
+            paperDidChange(onPageAt: index)
+        } else {
+            note.defaultPaper = paper
+            for index in pages.indices {
+                pages[index].record.paper = paper
+                paperDidChange(onPageAt: index)
+            }
+        }
+        note.modifiedAt = Date()
+        noteNeedsSave = true
+        scheduleSave()
+    }
+
+    func pageIndex(_ pageID: UUID) -> Int? {
+        pages.firstIndex { $0.id == pageID }
+    }
+
+    private func remove(_ strokeID: UUID, wasOwn: Bool, fromPageAt index: Int) {
+        if wasOwn {
+            pages[index].ownInk.strokes.removeAll { $0.id == strokeID }
+        } else {
+            // Another device's stroke: this device can't change their file, so it records the erase.
+            pages[index].ownInk.erasedStrokeIDs.insert(strokeID)
         }
     }
 
-    private func apply(_ edit: Edit, reversed: Bool) {
-        switch edit {
-        case .addStrokes(let pieces):
-            for piece in pieces {
-                guard let index = pages.firstIndex(where: { $0.id == piece.pageID }) else { continue }
-                if reversed {
-                    pages[index].ownInk.strokes.removeAll { $0.id == piece.stroke.id }
-                } else {
-                    pages[index].ownInk.strokes.append(piece.stroke)
-                }
-                pages[index].refreshVisibleStrokes()
-                inkDidChange(onPageAt: index)
-                onChange?(.inkChanged(pageID: piece.pageID, area: piece.stroke.bounds))
-            }
+    private func finish(_ touched: [UUID: CGRect]) {
+        for (pageID, area) in touched {
+            guard let index = pageIndex(pageID) else { continue }
+            pages[index].refreshVisibleStrokes()
+            inkDidChange(onPageAt: index)
+            onChange?(.inkChanged(pageID: pageID, area: area))
         }
         if normalizeTrailingPages() {
             onChange?(.pagesChanged)
         }
+    }
+
+    private func paperDidChange(onPageAt index: Int) {
+        // Only saved pages have a Page.json; the blank last page picks up the paper when it's saved.
+        if pages[index].isSaved {
+            pageRecordsToSave.insert(pages[index].id)
+        }
+        onChange?(.pageRedraw(pageID: pages[index].id))
     }
 
     /// Keeps exactly one blank page at the end. Returns whether pages were added or removed.

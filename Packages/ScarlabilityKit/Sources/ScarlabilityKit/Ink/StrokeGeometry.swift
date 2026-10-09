@@ -30,6 +30,57 @@ public enum StrokeGeometry {
         return path
     }
 
+    /// The highlighter's nib: thinner than it is tall, like a chisel-tip marker held to highlight a
+    /// line of text. Moving sideways leaves a band as tall as the stroke width.
+    static let chiselAspect: CGFloat = 0.3
+
+    /// Highlighter outline: the area a flat chisel nib sweeps along the points. Built as a union of
+    /// convex hulls of the nib at neighboring points, all wound the same way, like `path(for:)`.
+    public static func chiselPath(for points: [InkPoint]) -> CGPath {
+        let path = CGMutablePath()
+        let dense = interpolate(points)
+        func nib(_ point: InkPoint) -> [CGPoint] {
+            let halfHeight = CGFloat(point.width) / 2, halfWidth = halfHeight * chiselAspect
+            let x = CGFloat(point.x), y = CGFloat(point.y)
+            return [CGPoint(x: x - halfWidth, y: y - halfHeight), CGPoint(x: x + halfWidth, y: y - halfHeight),
+                    CGPoint(x: x + halfWidth, y: y + halfHeight), CGPoint(x: x - halfWidth, y: y + halfHeight)]
+        }
+        func addPolygon(_ corners: [CGPoint]) {
+            guard let first = corners.first else { return }
+            path.move(to: first)
+            corners.dropFirst().forEach { path.addLine(to: $0) }
+            path.closeSubpath()
+        }
+        guard let first = dense.first else { return path }
+        guard dense.count > 1 else {
+            addPolygon(convexHull(nib(first)))
+            return path
+        }
+        for index in 1..<dense.count {
+            addPolygon(convexHull(nib(dense[index - 1]) + nib(dense[index])))
+        }
+        return path
+    }
+
+    /// Andrew's monotone chain; the result always winds the same way.
+    static func convexHull(_ points: [CGPoint]) -> [CGPoint] {
+        let sorted = points.sorted { ($0.x, $0.y) < ($1.x, $1.y) }
+        guard sorted.count > 2 else { return sorted }
+        func cross(_ o: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+            (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+        }
+        var lower: [CGPoint] = [], upper: [CGPoint] = []
+        for point in sorted {
+            while lower.count >= 2, cross(lower[lower.count - 2], lower[lower.count - 1], point) <= 0 { lower.removeLast() }
+            lower.append(point)
+        }
+        for point in sorted.reversed() {
+            while upper.count >= 2, cross(upper[upper.count - 2], upper[upper.count - 1], point) <= 0 { upper.removeLast() }
+            upper.append(point)
+        }
+        return Array(lower.dropLast() + upper.dropLast())
+    }
+
     /// Fills in points along a centripetal Catmull-Rom spline so fast strokes curve smoothly
     /// instead of showing straight segments. Widths are interpolated linearly.
     public static func interpolate(_ points: [InkPoint]) -> [InkPoint] {

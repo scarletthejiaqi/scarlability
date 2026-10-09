@@ -21,15 +21,25 @@ struct RenderSnapshotTests {
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: scale, y: -scale)
 
-        let strokes = DemoInk.strokes().map(RenderedStroke.init)
+        // Demo writing, plus a yellow highlight crossing over it and over another highlight.
+        var strokes = DemoInk.strokes()
+        let yellow = InkColor(hex: 0xFFE14D)
+        strokes.append(Stroke(tool: .highlighter, color: yellow, points: (0...100).map { InkPoint(x: 50 + Float($0) * 3, y: 210, width: 16) },
+                              createdAt: Date(timeIntervalSinceReferenceDate: 900_000_000)))
+        strokes.append(Stroke(tool: .highlighter, color: yellow, points: (0...60).map { InkPoint(x: 200 + Float($0) * 3, y: 216, width: 16) },
+                              createdAt: Date(timeIntervalSinceReferenceDate: 900_000_001)))
         let page = CGRect(origin: .zero, size: size)
-        PaperRenderer.draw(.whiteLined, pageSize: size, in: context, clip: page)
-        InkRenderer.draw(strokes, in: context, clip: page)
+        let content = PageContent(paper: .whiteLined, size: size, strokes: strokes.map(RenderedStroke.init))
+        PageRenderer.draw(content, layer: .all, in: context, clip: page)
 
         let image = try #require(context.makeImage())
         // Spot check: the middle of the zigzag's first segment is ink-dark, a blank spot is white.
         #expect(try luminance(of: image, at: CGPoint(x: 75, y: 275), scale: scale) < 0.3)
         #expect(try luminance(of: image, at: CGPoint(x: 300, y: 700), scale: scale) > 0.95)
+        // Where the two highlights overlap, the color is the same as where there's only one.
+        let single = try luminance(of: image, at: CGPoint(x: 120, y: 205), scale: scale)
+        let overlap = try luminance(of: image, at: CGPoint(x: 260, y: 206), scale: scale)
+        #expect(single < 0.98 && abs(single - overlap) < 0.01)
 
         if let directory = ProcessInfo.processInfo.environment["SCARLABILITY_RENDER_DIR"] {
             let url = URL(filePath: directory).appending(path: "demo-page.png")
@@ -58,7 +68,7 @@ struct RenderSnapshotTests {
             context.scaleBy(x: scale, y: -scale)
             context.setFillColor(CGColor(gray: 1, alpha: 1))
             context.fill(area)
-            InkRenderer.draw([stroke], in: context, clip: area)
+            PageRenderer.drawInk([stroke], paper: .whiteLined, in: context, clip: area)
             let image = try #require(context.makeImage())
             let url = URL(filePath: directory).appending(path: "\(name).png")
             let destination = try #require(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
