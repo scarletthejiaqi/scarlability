@@ -1286,7 +1286,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     private var debugStep = 0
     private var debugStrokeOrigin = CGPoint.zero
 
-    /// Launch arguments for checking things in the Simulator, which has no Pencil:
+    /// Launch arguments (with `-OpenFirstNote`) for checking things in the Simulator, which has no Pencil:
     /// - `-DebugLiveStroke`: replays a synthetic pen stroke through the live-drawing path. It
     ///   crosses from page 1 onto page 2, stays live for 3 seconds, then finishes.
     /// - `-DebugUndoAfterStroke`: undoes it 2 seconds later.

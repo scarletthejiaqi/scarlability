@@ -79,7 +79,25 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 ## 10. Apple Pencil double-tap (M2)
 - [ ] Double-tapping the Pencil does what **iPad Settings → Apple Pencil → Double-tap** is set to (switch to the eraser and back, switch to the previous tool, or show the color picker).
 
-## 11. Questions to answer while testing
+## 11. Library (M3)
+- [ ] The app opens to the **library**: a sidebar on the left, notes as thumbnails on the right.
+- [ ] Sidebar: **All Notes**, **Unfiled**, your subjects, your dividers (fold them open and closed with the arrow) and **Recently Deleted**. Each shows how many notes it has.
+- [ ] **+ → New Subject**: give it a name, one of 8 colors, and optionally a divider. **+ → New Divider** works too.
+- [ ] Long-press a subject: **Rename, Color, Move to Divider, Delete**. Deleting sends its notes to Recently Deleted.
+- [ ] Long-press a divider name: **New Subject Here, Rename, Delete**.
+- [ ] Tap the **pencil button** (top right) for a new note named like "Note Oct 9, 2026 4:30 PM". It goes in the subject you're viewing (or Unfiled).
+- [ ] Tap a note to open it. **‹ Library** goes back, and the thumbnail shows your new writing.
+- [ ] In a note, **tap the title** to rename it.
+- [ ] Long-press a note: **Rename, Move to…, Duplicate, Delete**.
+- [ ] **Drag** a note's thumbnail onto a subject (or Unfiled) in the sidebar to move it.
+- [ ] **Select** (top right): tap several notes, then **Move** or **Delete** them together.
+- [ ] **Sort** (↑↓ button): Date Modified (default), Date Created, Title.
+- [ ] **Search** (magnifying glass) finds notes by title.
+- [ ] **Recently Deleted**: each note shows how many of its 30 days are left. Tap one for **Restore** or **Delete Forever**. **Empty** clears it all.
+- [ ] Restoring puts a note back in its subject (or in Unfiled if that subject is gone).
+- [ ] **Files app → iCloud Drive → Scarlability** has a folder per divider, a folder per subject inside it, each note as one item, and a "Recently Deleted" folder.
+
+## 12. Questions to answer while testing
 1. **Pressure feel:** too subtle, too strong, or right compared to Notability?
 2. **Smoothing:** too much (letters look rounded), too little (still bumpy), or right?
 3. **Pen sizes:** thin 1.4 / medium 2.2 / thick 3.4. Do they match what you use?
@@ -100,6 +118,14 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 16. **Shape snap:** hold still about 0.5 s within about 3 points. Too easy or too hard to trigger?
 17. **Duplicate** puts the copy a little down and to the right. OK?
 
+**From M3** (I picked a default for each):
+18. **New note names:** file names can't contain ":", so in the Files app "4:30 PM" shows as "4-30 PM". The title inside the app keeps the ":". OK?
+19. **Sidebar order:** subjects without a divider come first, then dividers, each in the order you made them. Do you want drag-to-reorder?
+20. **Thumbnails** show the first page. OK, or show the page you last wrote on?
+21. **Duplicates** are named "… copy". OK?
+22. **Search** only looks at titles (searching handwriting isn't in v1). Fine for now?
+23. **Changes from your other device** show up when you come back to the library or reopen the app. Instant updates come with sync in M7. OK until then?
+
 ---
 
-*New sections are added here as each part is built (next: M3, the library).*
+*New sections are added here as each part is built (next: M4, text and images).*

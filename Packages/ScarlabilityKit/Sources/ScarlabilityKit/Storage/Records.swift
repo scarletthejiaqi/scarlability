@@ -10,6 +10,11 @@ public struct NoteRecord: Codable, Identifiable, Hashable, Sendable {
     /// Paper and size for pages added to this note.
     public var defaultPaper: PaperStyle
     public var defaultPageSize: CGSize
+    /// When the note was moved to Recently Deleted.
+    public var deletedAt: Date?
+    /// The subject folder it was deleted from (relative to the notes folder; nil for Unfiled),
+    /// so Restore can put it back.
+    public var deletedFrom: String?
 
     public init(
         id: UUID = UUID(),

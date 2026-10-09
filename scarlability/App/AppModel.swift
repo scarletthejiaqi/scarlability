@@ -2,17 +2,19 @@ import Foundation
 import Observation
 import ScarlabilityKit
 
-/// App-wide state: where notes are stored and which note is open.
+/// App-wide state: where notes are stored, the library, and the open note.
 @Observable
 final class AppModel {
     enum State {
         case needsFolder
         case loading
-        case ready(NoteDocument)
+        case ready(LibraryModel)
         case failed(String)
     }
 
     private(set) var state: State = .needsFolder
+    /// The note being edited, shown full screen over the library.
+    var openDocument: NoteDocument?
     let toolSettings = ToolSettings()
     var folderName: String? { folderAccess?.displayName }
 
@@ -34,32 +36,75 @@ final class AppModel {
     }
 
     func forgetFolder() {
-        if case .ready(let document) = state {
-            document.saveNow()
-        }
+        closeDocument()
         folderAccess?.stop()
         folderAccess = nil
         FolderAccess.forget()
         state = .needsFolder
     }
 
-    private func open(_ access: FolderAccess) {
-        folderAccess?.stop()
-        folderAccess = access
-        state = .loading
-        let folder = NotebookFolder(root: access.notesURL, deviceID: DeviceIdentity.id)
+    func openNote(_ note: NotebookFolder.StoredNote) {
+        guard case .ready(let library) = state else { return }
         Task {
             do {
-                let document = try await NoteDocument.openTestNote(in: folder)
+                let document = try await NoteDocument.open(note, in: library.folder)
                 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-SeedDemoInk") {
                     document.seedDemoInkIfEmpty()
                 }
                 #endif
-                state = .ready(document)
+                openDocument = document
+                #if DEBUG
+                // Rename while open, write right after, then close: checks no stray copy is left.
+                if ProcessInfo.processInfo.arguments.contains("-DebugRenameOpenNote") {
+                    document.rename(to: "Renamed Note")
+                    if let page = document.pages.first {
+                        document.addStroke([.init(stroke: Stroke(color: .red, points: DemoInk.strokes()[0].points), pageID: page.id)])
+                    }
+                    try? await Task.sleep(for: .seconds(2))
+                    closeDocument()
+                }
+                #endif
             } catch {
-                state = .failed("Couldn't open your notes: \(error.localizedDescription)")
+                library.errorMessage = "Couldn't open “\(note.record.title)”: \(error.localizedDescription)"
             }
+        }
+    }
+
+    /// Saves and closes the open note, and refreshes the library (titles, thumbnails).
+    func closeDocument() {
+        openDocument?.saveNow()
+        openDocument = nil
+        if case .ready(let library) = state {
+            // Saves run on the same queue first, so the reload sees them.
+            Task { await library.reload() }
+        }
+    }
+
+    private func open(_ access: FolderAccess) {
+        folderAccess?.stop()
+        folderAccess = access
+        state = .loading
+        let library = LibraryModel(folder: NotebookFolder(root: access.notesURL, deviceID: DeviceIdentity.id))
+        Task {
+            await library.reload()
+            state = .ready(library)
+            #if DEBUG
+            let arguments = ProcessInfo.processInfo.arguments
+            if arguments.contains("-SeedLibrary") {
+                await library.seedDemoLibraryIfEmpty()
+            }
+            // For the canvas debug scenarios: open (or make) a note right away.
+            if arguments.contains("-OpenFirstNote") {
+                var note = library.snapshot.allNotes.first
+                if note == nil {
+                    note = await library.createNote()
+                }
+                if let note {
+                    openNote(note)
+                }
+            }
+            #endif
         }
     }
 }

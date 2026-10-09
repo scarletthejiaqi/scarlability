@@ -1,4 +1,4 @@
-# Scarlability — Build Plan (v6: M2 built; all testing at the end, see TESTING.md)
+# Scarlability — Build Plan (v7: M3 built; all testing at the end, see TESTING.md)
 
 A note-taking app for **iPad + Mac** that copies the *basic* parts of Notability:
 1. Notability-style tools: pressure pen, highlighter, eraser, text, selection, shape snap
@@ -143,7 +143,7 @@ iCloud Drive/Scarlability/          ← made inside the place you pick
 | ~~M0~~ | *Folded into M1 at your request.* | |
 | **M1** ✅ built | Setup (iPad + Mac only, read-write folder access, shared engine package + tests) plus the ink core on iPad: pressure pen + pressure curve, 3 colors + extra color, 3 sizes with sliders, top toolbar, Pencil-only + finger scroll/zoom, undo/redo (buttons + 2/3-finger taps), continuous pages with an automatic blank last page, saving to the iCloud folder | Write on your iPad and compare the feel with Notability. **We'll spend the most time here tuning pressure and smoothing.** |
 | **M2** ✅ built | Highlighter (flat chisel, behind ink, even color, yellow + extra color), eraser (whole stroke by default, partial, highlighter only), select (freeform + box; floating menu with Cut/Copy/Paste/Duplicate/Color/Thickness/Copy as Image/Delete; move, resize, rotate), shape snap (hold 0.5 s), Pencil double-tap, paper (Blank/Lined with 3 spacings; White/Cream/Gray/Dark; whole note or this page) | Use every drawing tool |
-| **M3** | Library: dividers, subjects, unfiled, thumbnails, sort, search, drag & drop, multi-select, delete/restore | Organize notes like in Notability |
+| **M3** ✅ built | Library: sidebar (All Notes, Unfiled, Dividers ▸ Subjects with 8 colors, Recently Deleted for 30 days), thumbnail grid, sort, title search, rename/move/duplicate/delete, drag onto a subject, multi-select Move/Delete, rename by tapping the title; folders in Files mirror it | Organize notes like in Notability |
 | **M4** | Text and images: text tool with formatting and lists, images from Photos/Files/camera/scanner, paste, move/resize | Type and add pictures |
 | **M5** | PDF: import (new note or into a note), annotate, text-snap highlighter toggle, all export options | Annotate lecture slides and export them |
 | **M6** | Mac app: same library + editor, trackpad/mouse drawing, keyboard shortcuts (⌘Z, ⌘N, ⌘V…) | Use the app on your MacBook |

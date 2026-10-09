@@ -84,8 +84,13 @@ final class NoteDocument {
     }
 
     private(set) var note: NoteRecord
-    /// The note's `.scarnote` package.
-    let noteURL: URL
+    /// Where the note's package is. Only read or changed on `NotesIO.queue`, so a rename and the
+    /// saves queued around it always agree on where the note is.
+    private final class Location: @unchecked Sendable {
+        var url: URL
+        init(_ url: URL) { self.url = url }
+    }
+    @ObservationIgnored private let location: Location
     private(set) var pages: [Page]
     /// Set when writing to the notes folder fails; cleared by the next successful save.
     private(set) var saveFailed = false
@@ -109,12 +114,11 @@ final class NoteDocument {
 
     /// Changes are written this long after the last edit, so a burst of writing is one save.
     private static let saveDelay: Duration = .seconds(1)
-    nonisolated private static let ioQueue = DispatchQueue(label: "scarlability.notes-io")
     nonisolated private static let logger = Logger(subsystem: "scarlability", category: "NoteDocument")
 
     init(note: NotebookFolder.StoredNote, loadedPages: [NotebookFolder.LoadedPage], folder: NotebookFolder) {
         self.note = note.record
-        self.noteURL = note.url
+        self.location = Location(note.url)
         self.folder = folder
         self.pages = loadedPages.map { loaded in
             var others = loaded.inks
@@ -124,15 +128,29 @@ final class NoteDocument {
         _ = normalizeTrailingPages()
     }
 
-    /// Opens the most recently edited note, or creates one. (The real library arrives in M3.)
-    static func openTestNote(in folder: NotebookFolder) async throws -> NoteDocument {
-        let (note, pages) = try await Task.detached {
-            if let latest = try folder.loadNotes().max(by: { $0.record.modifiedAt < $1.record.modifiedAt }) {
-                return (latest, try folder.loadPages(inNoteAt: latest.url))
-            }
-            return (try folder.createNote(title: "Test Note"), [])
-        }.value
+    /// Loads a note's pages and ink.
+    static func open(_ note: NotebookFolder.StoredNote, in folder: NotebookFolder) async throws -> NoteDocument {
+        let pages = try await NotesIO.run { try folder.loadPages(inNoteAt: note.url) }
         return NoteDocument(note: note, loadedPages: pages, folder: folder)
+    }
+
+    /// Renames the note (and its package, so Files shows the new name).
+    func rename(to title: String) {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, title != note.title else { return }
+        note.title = title
+        note.modifiedAt = Date()
+        noteNeedsSave = true
+        // Save under the current name first; the rename then runs after it on the same queue.
+        saveNow()
+        let folder = folder, location = location
+        NotesIO.queue.async {
+            do {
+                location.url = try folder.renameNote(at: location.url, to: title)
+            } catch {
+                Self.logger.error("Renaming note failed: \(error)")
+            }
+        }
     }
 
     // MARK: - Editing
@@ -343,8 +361,9 @@ final class NoteDocument {
         inkToSave.removeAll()
 
         let folder = folder
-        let noteURL = noteURL
-        Self.ioQueue.async {
+        let location = location
+        NotesIO.queue.async {
+            let noteURL = location.url
             let failed: Bool
             do {
                 // Page records first, so another device never sees ink for a page it doesn't know.
@@ -388,3 +407,6 @@ final class NoteDocument {
     }
     #endif
 }
+
+/// Lets the open note drive a full-screen cover.
+extension NoteDocument: Identifiable {}

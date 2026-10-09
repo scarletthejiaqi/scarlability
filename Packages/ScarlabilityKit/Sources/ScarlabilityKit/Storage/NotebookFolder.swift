@@ -26,10 +26,12 @@ public struct NotebookFolder: Sendable {
         self.deviceID = deviceID
     }
 
-    public struct StoredNote: Sendable {
+    public struct StoredNote: Sendable, Identifiable, Hashable {
         /// The note's package.
         public var url: URL
         public var record: NoteRecord
+
+        public var id: URL { url }
     }
 
     public struct LoadedPage: Sendable {
@@ -49,12 +51,18 @@ public struct NotebookFolder: Sendable {
             }
     }
 
-    /// Creates a new note package named after `title`, adding " 2", " 3"… if that name is taken.
-    public func createNote(title: String) throws -> StoredNote {
+    /// Creates a new note package named after `title` in `directory` (the top level, i.e. Unfiled,
+    /// by default), adding " 2", " 3"… if that name is taken.
+    public func createNote(title: String, in directory: URL? = nil) throws -> StoredNote {
         let record = NoteRecord(title: title)
-        let url = availableURL(forTitle: title)
+        let url = availableURL(for: title, in: directory ?? root, pathExtension: Self.noteExtension)
         try save(record, at: url)
         return StoredNote(url: url, record: record)
+    }
+
+    /// Loads just the first page, for thumbnails.
+    public func loadFirstPage(inNoteAt noteURL: URL) -> LoadedPage? {
+        try? loadPages(inNoteAt: noteURL).first
     }
 
     public func save(_ record: NoteRecord, at noteURL: URL) throws {
@@ -100,7 +108,7 @@ public struct NotebookFolder: Sendable {
 
     // MARK: - Layout
 
-    private func pagesDirectory(_ noteURL: URL) -> URL {
+    func pagesDirectory(_ noteURL: URL) -> URL {
         noteURL.appending(path: "Pages", directoryHint: .isDirectory)
     }
 
@@ -108,42 +116,52 @@ public struct NotebookFolder: Sendable {
         pagesDirectory(noteURL).appending(path: pageID.uuidString, directoryHint: .isDirectory)
     }
 
-    private func availableURL(forTitle title: String) -> URL {
-        let cleaned = title
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = cleaned.isEmpty || cleaned.hasPrefix(".") ? "Untitled" : cleaned
+    /// A file name made from `name` that's free in `directory` (adding " 2", " 3"… if needed).
+    func availableURL(for name: String, in directory: URL, pathExtension: String?) -> URL {
+        let base = Self.fileName(for: name)
+        func url(_ candidate: String) -> URL {
+            let file = pathExtension.map { "\(candidate).\($0)" } ?? candidate
+            return directory.appending(path: file, directoryHint: .isDirectory)
+        }
         var candidate = base
         var number = 2
-        while FileManager.default.fileExists(atPath: root.appending(path: "\(candidate).\(Self.noteExtension)").path(percentEncoded: false)) {
+        while FileManager.default.fileExists(atPath: url(candidate).path(percentEncoded: false)) {
             candidate = "\(base) \(number)"
             number += 1
         }
-        return root.appending(path: "\(candidate).\(Self.noteExtension)", directoryHint: .isDirectory)
+        return url(candidate)
+    }
+
+    /// A name that's safe as a file name: no slashes or colons, not hidden.
+    static func fileName(for name: String) -> String {
+        let cleaned = name
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty || cleaned.hasPrefix(".") ? "Untitled" : cleaned
     }
 
     // MARK: - Coordinated file access
 
     // Dates use Foundation's default encoding (seconds since 2001), which round-trips exactly.
-    private static let encoder: JSONEncoder = {
+    static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return encoder
     }()
 
-    private static let decoder = JSONDecoder()
+    static let decoder = JSONDecoder()
 
-    private func decodeJSON<T: Decodable>(_ type: T.Type, from url: URL) throws -> T {
+    func decodeJSON<T: Decodable>(_ type: T.Type, from url: URL) throws -> T {
         let data = try coordinatedRead(url) { try Data(contentsOf: $0) }
         return try Self.decoder.decode(type, from: data)
     }
 
-    private func writeJSON(_ value: some Encodable, to url: URL) throws {
+    func writeJSON(_ value: some Encodable, to url: URL) throws {
         try coordinatedWrite(to: url, data: try Self.encoder.encode(value))
     }
 
-    private func coordinatedRead<T>(_ url: URL, _ body: (URL) throws -> T) throws -> T {
+    func coordinatedRead<T>(_ url: URL, _ body: (URL) throws -> T) throws -> T {
         var coordinationError: NSError?
         var result: Result<T, Error>?
         NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: url, options: [], error: &coordinationError) { url in
@@ -153,7 +171,7 @@ public struct NotebookFolder: Sendable {
         return try result!.get()
     }
 
-    private func coordinatedWrite(to url: URL, data: Data) throws {
+    func coordinatedWrite(to url: URL, data: Data) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         var coordinationError: NSError?
         var writeError: Error?
@@ -167,7 +185,7 @@ public struct NotebookFolder: Sendable {
         if let error = coordinationError ?? writeError { throw error }
     }
 
-    private func contents(of directory: URL) throws -> [URL] {
+    func contents(of directory: URL) throws -> [URL] {
         guard FileManager.default.fileExists(atPath: directory.path(percentEncoded: false)) else { return [] }
         return try FileManager.default.contentsOfDirectory(
             at: directory,
@@ -176,7 +194,7 @@ public struct NotebookFolder: Sendable {
         )
     }
 
-    private func subdirectories(of directory: URL) throws -> [URL] {
+    func subdirectories(of directory: URL) throws -> [URL] {
         try contents(of: directory).filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
     }
 }

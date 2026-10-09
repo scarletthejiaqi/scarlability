@@ -8,9 +8,12 @@ struct RootView: View {
         #if os(iOS)
         content
             .onChange(of: scenePhase) { _, phase in
-                // Write pending changes before the app might be suspended.
-                if phase != .active, case .ready(let document) = model.state {
-                    document.saveNow()
+                if phase != .active {
+                    // Write pending changes before the app might be suspended.
+                    model.openDocument?.saveNow()
+                } else if case .ready(let library) = model.state, model.openDocument == nil {
+                    // Pick up notes changed on other devices while away.
+                    Task { await library.reload() }
                 }
             }
         #else
@@ -26,13 +29,17 @@ struct RootView: View {
     #if os(iOS)
     @ViewBuilder
     private var content: some View {
+        @Bindable var model = model
         switch model.state {
         case .needsFolder:
             FolderSetupView()
         case .loading:
             ProgressView("Opening your notes…")
-        case .ready(let document):
-            NoteEditorScreen(document: document)
+        case .ready(let library):
+            LibraryView(library: library)
+                .fullScreenCover(item: $model.openDocument) { document in
+                    NoteEditorScreen(document: document)
+                }
         case .failed(let message):
             FolderSetupView(errorMessage: message)
         }

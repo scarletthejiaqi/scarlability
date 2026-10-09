@@ -13,6 +13,8 @@ struct EditorToolbar: View {
     @State private var editingSizeSlot: Int?
     @State private var showsSettings = false
     @State private var showsPaper = false
+    @State private var renaming = false
+    @State private var renameText = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -47,9 +49,31 @@ struct EditorToolbar: View {
 
     private var titleRow: some View {
         ZStack {
-            Text(document.note.title)
-                .font(.headline)
+            // Tap the title to rename the note.
+            Button {
+                renameText = document.note.title
+                renaming = true
+            } label: {
+                Text(document.note.title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .frame(maxWidth: 420)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Rename the note")
+            .alert("Rename Note", isPresented: $renaming) {
+                TextField("Title", text: $renameText)
+                Button("Rename") { document.rename(to: renameText) }
+                Button("Cancel", role: .cancel) {}
+            }
             HStack(spacing: 16) {
+                Button {
+                    model.closeDocument()
+                } label: {
+                    Label("Library", systemImage: "chevron.left")
+                        .font(.body.weight(.medium))
+                }
                 Spacer()
                 if document.saveFailed {
                     Label("Not saved", systemImage: "exclamationmark.icloud")
