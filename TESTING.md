@@ -90,7 +90,7 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] Long-press a folder group: **New Folder Inside, Rename, Color, Delete**.
 - [ ] Tap the blue **+ New → Note** (top right) for a new note named like "Note Oct 9, 2026 4:30 PM". It goes in the folder you're viewing (or Unfiled). **+ New → Folder** makes a folder.
 - [ ] Tap a note to open it. The **←** button goes back, and the thumbnail shows your new writing.
-- [ ] In a note, **⋯ → Rename Note**.
+- [ ] In a note, **tap the note's name** above the toolbar (or **⋯ → Rename Note**) to rename it. The new name shows right away, and in the library.
 - [ ] Long-press a note: **Rename, Add to Favorites (★), Move to…, Duplicate, Delete**. A favorite gets a yellow ★ on its card and shows in the Favorites tab. **Remove from Favorites** takes it out.
 - [ ] **Drag** a note's card onto a folder in the sidebar to move it.
 - [ ] **⋯ (top right) → Select Notes**: tap several notes, then **Favorite**, **Move** or **Delete** them together.
@@ -126,7 +126,7 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] Close and reopen the note: text and pictures are still there, and the library thumbnail shows them.
 
 ## 13b. Note screen and smoother writing (M4.5)
-- [ ] **Look:** the page fills the screen. Floating on top: **←** (left), the tool palette (middle: pen, highlighter, eraser, Aa text, lasso, ⊕ insert, ✋ finger drawing, with the current tool's colors and sizes below), and **undo, redo, ⋯, pages** (right). No status bar.
+- [ ] **Look:** the page fills the screen. Floating on top: **←** (left), the note's name with the tool palette under it (middle: pen, highlighter, eraser, Aa text, lasso, ⊕ insert, ✋ finger drawing, with the current tool's colors and sizes below), and **undo, redo, ⋯, pages** (right). No status bar.
 - [ ] **⋯** has **Rename Note, Paper, Settings**.
 - [ ] **Page number** at the bottom right ("2 / 5"). The ⌃ and ⌄ arrows jump to the page above and below.
 - [ ] **Page panel:** tap the pages button (top right, two rectangles). Thumbnails of every page appear on the right and the page shrinks to fit next to them. The current page has a blue border. Tap a thumbnail to jump there. Write something; its thumbnail updates a moment later.

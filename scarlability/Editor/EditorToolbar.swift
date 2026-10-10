@@ -3,9 +3,9 @@ import ScarlabilityKit
 import SwiftUI
 import UIKit
 
-/// Notability-style floating toolbar: the back button on the left, the tool palette in the
-/// middle (tools on top, the current tool's colors and sizes below), and undo, redo, the note
-/// menu and the page panel button on the right.
+/// Notability-style floating toolbar: the back button on the left, the note's name and the tool
+/// palette in the middle (tools on top, the current tool's colors and sizes below), and undo,
+/// redo, the note menu and the page panel button on the right.
 struct EditorToolbar: View {
     let document: NoteDocument
     @Bindable var settings: ToolSettings
@@ -17,6 +17,8 @@ struct EditorToolbar: View {
 
     @State private var leftWidth: CGFloat = 0
     @State private var rightWidth: CGFloat = 0
+    @State private var renaming = false
+    @State private var renameText = ""
 
     var body: some View {
         let side = max(leftWidth, rightWidth)
@@ -39,6 +41,16 @@ struct EditorToolbar: View {
             }
         }
         .padding(.horizontal, 12)
+        .alert("Rename Note", isPresented: $renaming) {
+            TextField("Title", text: $renameText)
+            Button("Rename") { document.rename(to: renameText) }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private func startRenaming() {
+        renameText = document.note.title
+        renaming = true
     }
 
     private var leading: some View {
@@ -66,13 +78,29 @@ struct EditorToolbar: View {
     }
 
     private var trailing: some View {
-        NoteActions(document: document, settings: settings, showsPages: $showsPages)
+        NoteActions(document: document, settings: settings, showsPages: $showsPages, onRename: startRenaming)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rightWidth = $0 }
     }
 
+    /// The note's name (tap to rename it) above the tool palette.
     private var palette: some View {
-        ToolPalette(settings: settings, session: session)
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { bottom = $0 }
+        VStack(spacing: 6) {
+            Button(action: startRenaming) {
+                Text(document.note.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 360)
+                    .padding(.horizontal, 10)
+                    .frame(height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Rename the note")
+            ToolPalette(settings: settings, session: session)
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { bottom = $0 }
     }
 }
 
@@ -91,12 +119,11 @@ private struct NoteActions: View {
     let document: NoteDocument
     @Bindable var settings: ToolSettings
     @Binding var showsPages: Bool
+    let onRename: () -> Void
     @Environment(AppModel.self) private var model
 
     @State private var showsSettings = false
     @State private var showsPaper = false
-    @State private var renaming = false
-    @State private var renameText = ""
 
     var body: some View {
         HStack(spacing: 4) {
@@ -105,10 +132,7 @@ private struct NoteActions: View {
             iconButton("arrow.uturn.forward", label: "Redo", action: document.redo)
                 .disabled(!document.canRedo)
             Menu {
-                Button("Rename Note", systemImage: "pencil") {
-                    renameText = document.note.title
-                    renaming = true
-                }
+                Button("Rename Note", systemImage: "pencil", action: onRename)
                 Button("Paper", systemImage: "doc.richtext") { showsPaper = true }
                 Button("Settings", systemImage: "gearshape") { showsSettings = true }
             } label: {
@@ -134,11 +158,6 @@ private struct NoteActions: View {
         .padding(.horizontal, 6)
         .frame(height: 52)
         .floatingCard(cornerRadius: 14)
-        .alert("Rename Note", isPresented: $renaming) {
-            TextField("Title", text: $renameText)
-            Button("Rename") { document.rename(to: renameText) }
-            Button("Cancel", role: .cancel) {}
-        }
     }
 
     private func iconButton(_ systemImage: String, label: String, isOn: Bool = false, action: @escaping () -> Void) -> some View {
