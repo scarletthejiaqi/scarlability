@@ -140,6 +140,9 @@ public struct DeviceItems: Codable, Equatable, Sendable {
 public enum PageBackground: Codable, Hashable, Sendable {
     /// An image in the note package's Images folder, fitted to the page.
     case image(fileName: String)
+    /// A page of a PDF in the note package's PDFs folder (`pageIndex` is zero-based). The page is
+    /// the PDF page's size.
+    case pdf(fileName: String, pageIndex: Int)
 }
 
 public enum ItemMerge {

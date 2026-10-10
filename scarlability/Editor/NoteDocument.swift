@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import Observation
+import PDFKit
 import ScarlabilityKit
 import os
 
@@ -30,6 +31,13 @@ final class NoteDocument {
 
         /// Nothing on it: no ink, text, images or scanned background.
         var isBlank: Bool { visibleStrokes.isEmpty && visibleItems.isEmpty && record.background == nil }
+
+        /// A page of an imported PDF. Like Notability, a note ending in a PDF page doesn't get a
+        /// blank page after it (add one from the page panel).
+        var showsPDF: Bool {
+            if case .pdf? = record.background { return true }
+            return false
+        }
 
         init(record: PageRecord, ownInk: DeviceInk, otherInks: [UUID: DeviceInk], ownItems: DeviceItems = DeviceItems(),
              otherItems: [UUID: DeviceItems] = [:], isSaved: Bool) {
@@ -136,6 +144,9 @@ final class NoteDocument {
     @ObservationIgnored private var openGroup: AppliedChange?
     /// The page in the middle of the screen; set by the canvas. Paper changes for "this page" use it.
     @ObservationIgnored var visiblePageID: UUID?
+    @ObservationIgnored private var pdfFiles: [String: PDFFile] = [:]
+    @ObservationIgnored private var pdfData: [String: Data] = [:]
+    @ObservationIgnored private var textPDFs: [String: PDFDocument] = [:]
 
     var canUndo: Bool { history.canUndo }
     var canRedo: Bool { history.canRedo }
@@ -143,7 +154,8 @@ final class NoteDocument {
     /// Called for every change, so the canvas can redraw just what changed.
     @ObservationIgnored var onChange: ((Change) -> Void)?
 
-    @ObservationIgnored private let folder: NotebookFolder
+    /// The notes folder the note is in.
+    @ObservationIgnored let folder: NotebookFolder
     @ObservationIgnored private var noteNeedsSave = false
     @ObservationIgnored private var pageRecordsToSave: Set<UUID> = []
     @ObservationIgnored private var inkToSave: Set<UUID> = []
@@ -193,11 +205,20 @@ final class NoteDocument {
         }
     }
 
+    /// Where the note's package is, once every save and rename asked for so far has happened.
+    func currentURL() async -> URL {
+        saveNow()
+        let location = location
+        return await withCheckedContinuation { continuation in
+            NotesIO.queue.async { continuation.resume(returning: location.url) }
+        }
+    }
+
     // MARK: - Editing
 
     /// Called when a stroke starts. Writing on the blank last page adds a new blank page below it.
     func beginWriting(onPage pageID: UUID) {
-        guard pages.last?.id == pageID else { return }
+        guard let last = pages.last, last.id == pageID, !last.showsPDF else { return }
         appendBlankPage()
         onChange?(.pagesChanged)
     }
@@ -355,17 +376,47 @@ final class NoteDocument {
 
     /// Adds scanned pages (each an image file already saved) after a page, as page backgrounds.
     func insertScannedPages(_ fileNames: [String], after pageID: UUID?) {
-        guard !fileNames.isEmpty else { return }
+        insertPages(fileNames.map { fileName in
+            var record = PageRecord(sortKey: 0, size: note.defaultPageSize, paper: PaperStyle(template: .blank, color: .white))
+            record.background = .image(fileName: fileName)
+            return record
+        }, after: pageID)
+    }
+
+    /// Adds a PDF's pages after a page (each the PDF page's size, on plain white paper), and
+    /// saves the PDF into the note. Returns false if the data isn't a PDF.
+    @discardableResult
+    func insertPDF(_ data: Data, after pageID: UUID?) -> Bool {
+        guard let file = PDFFile(data: data) else { return false }
+        let fileName = "\(UUID().uuidString).pdf"
+        let folder = folder, location = location
+        // Saved before the pages that show it, on the same queue.
+        NotesIO.queue.async {
+            do {
+                try folder.savePDF(data, named: fileName, inNoteAt: location.url)
+            } catch {
+                Self.logger.error("Saving PDF failed: \(error)")
+            }
+        }
+        pdfFiles[fileName] = file
+        pdfData[fileName] = data
+        insertPages((0..<file.pageCount).compactMap { index in
+            guard let page = file.page(at: index) else { return nil }
+            var record = PageRecord(sortKey: 0, size: page.size, paper: PaperStyle(template: .blank, color: .white))
+            record.background = .pdf(fileName: fileName, pageIndex: index)
+            return record
+        }, after: pageID)
+        return true
+    }
+
+    /// Inserts new, saved pages after a page (or before the blank last page), in order.
+    private func insertPages(_ records: [PageRecord], after pageID: UUID?) {
+        guard !records.isEmpty else { return }
         let index = pageID.flatMap { pageIndex($0) } ?? max(pages.count - 2, 0)
         let start = pages.indices.contains(index) ? pages[index].record.sortKey : 0
         let end = index + 1 < pages.count ? pages[index + 1].record.sortKey : start + 1
-        for (offset, fileName) in fileNames.enumerated() {
-            var record = PageRecord(
-                sortKey: start + (end - start) * Double(offset + 1) / Double(fileNames.count + 1),
-                size: note.defaultPageSize,
-                paper: PaperStyle(template: .blank, color: .white)
-            )
-            record.background = .image(fileName: fileName)
+        for (offset, var record) in records.enumerated() {
+            record.sortKey = start + (end - start) * Double(offset + 1) / Double(records.count + 1)
             pages.insert(Page(record: record, ownInk: DeviceInk(), otherInks: [:], isSaved: true), at: min(index + 1 + offset, pages.count))
             pageRecordsToSave.insert(record.id)
         }
@@ -374,6 +425,26 @@ final class NoteDocument {
         scheduleSave()
         _ = normalizeTrailingPages()
         onChange?(.pagesChanged)
+    }
+
+    /// An imported PDF in the note, opened once.
+    func loadPDF(named fileName: String) async -> PDFFile? {
+        if let cached = pdfFiles[fileName] { return cached }
+        let folder = folder, location = location
+        let data = try? await NotesIO.run { folder.loadPDFData(named: fileName, inNoteAt: location.url) }
+        guard let data = data ?? nil, let file = PDFFile(data: data) else { return nil }
+        pdfFiles[fileName] = file
+        pdfData[fileName] = data
+        return file
+    }
+
+    /// The same PDF opened with PDFKit, which can find its text (for the highlighter's text snap).
+    func textPDF(named fileName: String) async -> PDFDocument? {
+        if let cached = textPDFs[fileName] { return cached }
+        _ = await loadPDF(named: fileName)
+        guard let data = pdfData[fileName], let document = PDFDocument(data: data) else { return nil }
+        textPDFs[fileName] = document
+        return document
     }
 
     /// Changes the paper of the whole note (and pages added later), or of one page.
@@ -488,7 +559,7 @@ final class NoteDocument {
             pages.removeLast()
             changed = true
         }
-        if pages.last.map({ !$0.isBlank }) ?? true {
+        if pages.last.map({ !$0.isBlank && !$0.showsPDF }) ?? true {
             appendBlankPage()
             changed = true
         }

@@ -175,25 +175,10 @@ final class LibraryModel {
         thumbnailsInProgress.insert(id)
         let folder = folder, record = note.record, url = note.url
         Self.thumbnailQueue.async {
-            let page = folder.loadFirstPage(inNoteAt: url)
-            let strokes = page.map { InkMerge.visibleStrokes(from: $0.inks.values) } ?? []
-            func picture(_ fileName: String) -> CGImage? {
-                folder.loadImageData(named: fileName, inNoteAt: url).flatMap { ImageLoading.cgImage(from: $0, maxPixelSize: 600) }
-            }
-            let items = (page.map { ItemMerge.visibleItems(from: $0.items.values) } ?? []).map { item in
-                RenderedItem(item, image: item.image.flatMap { picture($0.fileName) })
-            }
-            var background: CGImage?
-            if case .image(let fileName)? = page?.record.background {
-                background = picture(fileName)
-            }
-            let content = PageContent(
-                paper: page?.record.paper ?? record.defaultPaper,
-                size: page?.record.size ?? record.defaultPageSize,
-                strokes: strokes.map(RenderedStroke.init),
-                items: items,
-                backgroundImage: background
-            )
+            // The first page with every device's ink, its pictures and PDF page (or a blank page
+            // in the note's paper if it has none yet).
+            let content = (try? folder.renderPages(inNoteAt: url, pageLimit: 1, imageSize: 600))?.first
+                ?? PageContent(paper: record.defaultPaper, size: record.defaultPageSize, strokes: [])
             let image = Thumbnail.render(content, width: Self.thumbnailWidth, scale: 2)
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -229,6 +214,27 @@ final class LibraryModel {
         let title = "Note \(now.formatted(.dateTime.month(.abbreviated).day().year())) \(now.formatted(date: .omitted, time: .shortened))"
         let subject = currentSubject
         return await perform("create a note") { try $0.createNote(title: title, inSubject: subject) }
+    }
+
+    /// Makes a new note from each PDF (in the folder being viewed, or Unfiled), named after the
+    /// file, one page per PDF page.
+    func importPDFs(_ urls: [URL]) async -> [NotebookFolder.StoredNote] {
+        let subject = currentSubject
+        let imported = await perform("import the PDF") { folder in
+            try urls.compactMap { url -> NotebookFolder.StoredNote? in
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                var data: Data?
+                var error: NSError?
+                NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &error) { data = try? Data(contentsOf: $0) }
+                guard let data else { return nil }
+                return try folder.createNote(fromPDF: data, title: url.deletingPathExtension().lastPathComponent, inSubject: subject)
+            }
+        } ?? []
+        if imported.count < urls.count {
+            errorMessage = urls.count == 1 ? "That file couldn't be opened as a PDF." : "Some of the files couldn't be opened as PDFs."
+        }
+        return imported
     }
 
     func createSubject(named name: String, color: InkColor, inDivider divider: String?) async {

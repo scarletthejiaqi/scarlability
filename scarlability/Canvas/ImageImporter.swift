@@ -4,13 +4,16 @@ import UIKit
 import UniformTypeIdentifiers
 import VisionKit
 
-/// Gets pictures from Photos, the camera, the document scanner or Files, as image data.
+/// Gets pictures from Photos, the camera, the document scanner or Files, as image data, and
+/// PDFs from Files.
 final class ImageImporter: NSObject, PHPickerViewControllerDelegate, UIImagePickerControllerDelegate,
     UINavigationControllerDelegate, VNDocumentCameraViewControllerDelegate, UIDocumentPickerDelegate {
     /// Pictures to place on the page.
     var onImages: ([Data]) -> Void = { _ in }
     /// Scanned pages, to add as new pages.
     var onScans: ([Data]) -> Void = { _ in }
+    /// PDFs, whose pages are added as new pages.
+    var onPDFs: ([Data]) -> Void = { _ in }
 
     func present(_ source: EditorSession.ImageSource, from presenter: UIViewController) {
         switch source {
@@ -33,7 +36,7 @@ final class ImageImporter: NSObject, PHPickerViewControllerDelegate, UIImagePick
             scanner.delegate = self
             presenter.present(scanner, animated: true)
         case .files:
-            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.image], asCopy: true)
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.pdf, .image], asCopy: true)
             picker.allowsMultipleSelection = true
             picker.delegate = self
             presenter.present(picker, animated: true)
@@ -90,7 +93,10 @@ final class ImageImporter: NSObject, PHPickerViewControllerDelegate, UIImagePick
     }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        let images = urls.compactMap { try? Data(contentsOf: $0) }
+        let isPDF = { (url: URL) in UTType(filenameExtension: url.pathExtension)?.conforms(to: .pdf) ?? false }
+        let pdfs = urls.filter(isPDF).compactMap { try? Data(contentsOf: $0) }
+        let images = urls.filter { !isPDF($0) }.compactMap { try? Data(contentsOf: $0) }
+        if !pdfs.isEmpty { onPDFs(pdfs) }
         if !images.isEmpty { onImages(images) }
     }
 }

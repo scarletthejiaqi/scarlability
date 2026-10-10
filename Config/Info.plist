@@ -3,7 +3,8 @@
 <!--
   Keys that can't be set as build settings; Xcode merges these with the generated Info.plist.
   Declaring the .scarnote package type makes the Files app and Finder show each note as a single
-  item (named after the note) instead of a folder.
+  item (named after the note) instead of a folder. PDFs can be opened in the app ("Open in…"),
+  which imports them as a new note.
 -->
 <plist version="1.0">
 <dict>
@@ -42,6 +43,18 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>scarlability.note</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>PDF</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.adobe.pdf</string>
 			</array>
 		</dict>
 	</array>

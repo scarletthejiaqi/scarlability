@@ -1,4 +1,5 @@
 #if os(iOS)
+import PDFKit
 import ScarlabilityKit
 import SwiftUI
 import UIKit
@@ -17,6 +18,7 @@ struct NoteCanvas: UIViewRepresentable {
     func updateUIView(_ canvas: NoteCanvasView, context: Context) {
         canvas.drawsWithFinger = settings.drawsWithFinger
         canvas.tool = settings.tool
+        canvas.snapsHighlighterToText = settings.highlighterSnapsToText
         canvas.topInset = topInset
     }
 }
@@ -81,6 +83,20 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     /// Decoded image files, by file name.
     var images: [String: CGImage] = [:]
     var loadingImages: Set<String> = []
+    /// Imported PDFs shown as page backgrounds, and the same files opened to find their text.
+    var pdfs: [String: PDFFile] = [:]
+    var textPDFs: [String: PDFDocument] = [:]
+    var loadingPDFs: Set<String> = []
+    var loadingTextPDFs: Set<String> = []
+    /// Turning on the highlighter's text snap opens the PDFs' text right away.
+    var snapsHighlighterToText = false {
+        didSet {
+            guard snapsHighlighterToText, !oldValue else { return }
+            for page in document.pages {
+                if case .pdf(let fileName, _)? = page.record.background, textPDFs[fileName] == nil { loadPDF(fileName) }
+            }
+        }
+    }
     /// Items left out of the page tiles while they're edited or dragged.
     var hiddenItemIDs: Set<UUID> = []
     let textView = UITextView()
@@ -136,6 +152,10 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         /// The shape as it snapped, where the pen was then, and the width it's drawn at. Moving
         /// the pen from there reshapes it (see `ShapeAdjusting`).
         var snapped: (shape: ShapeRecognizer.Shape, pen: CGPoint, width: Float)?
+        /// For a highlighter with text snap on a PDF page: the PDF page, and the text lines
+        /// the stroke covers so far (page coordinates).
+        var textPage: (page: PDFPage, background: PDFBackground)?
+        var textLines: [CGRect] = []
     }
 
     /// Selected strokes, text boxes and images, and the box around them in content coordinates.
@@ -556,9 +576,16 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         let strokes = page.visibleStrokes.filter { !hiddenStrokeIDs.contains($0.id) }.map(rendered)
         let items = page.visibleItems.filter { !hiddenItemIDs.contains($0.id) }.map(renderedItem)
         var background: CGImage?
-        if case .image(let fileName)? = page.record.background {
+        var backgroundPDF: PDFBackground?
+        switch page.record.background {
+        case .image(let fileName)?:
             background = images[fileName]
             if background == nil { loadImage(fileName) }
+        case .pdf(let fileName, let index)?:
+            backgroundPDF = pdfs[fileName]?.page(at: index)
+            if backgroundPDF == nil || (settings.highlighterSnapsToText && textPDFs[fileName] == nil) { loadPDF(fileName) }
+        case nil:
+            break
         }
         let hasBottomEdge = pageID != document.pages.last?.id
         if hasBottomEdge {
@@ -573,6 +600,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
                 strokes: strokes,
                 items: items,
                 backgroundImage: background,
+                backgroundPDF: backgroundPDF,
                 bottomEdgeColor: hasBottomEdge ? Self.pageEdgeColor : nil
             ),
             changedRect: changedRect
@@ -663,8 +691,22 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             color: presets.currentColor,
             displayColor: isHighlighter ? presets.currentColor : presets.currentColor.displayed(on: page.record.paper)
         )
+        if isHighlighter {
+            activeStroke?.textPage = textSnapPage(page)
+        }
         add(samples, forceUpdates: [], predicted: recognizer.predictedLocations)
         document.beginWriting(onPage: page.id)
+    }
+
+    /// The PDF page a highlighter stroke on `page` snaps to the text of, if text snap is on.
+    func textSnapPage(_ page: NoteDocument.Page) -> (page: PDFPage, background: PDFBackground)? {
+        guard settings.highlighterSnapsToText, case .pdf(let fileName, let index)? = page.record.background else { return nil }
+        guard let background = pdfs[fileName]?.page(at: index), let pdfPage = textPDFs[fileName]?.page(at: index) else {
+            // Not open yet: this stroke stays freehand, the next one snaps.
+            loadPDF(fileName)
+            return nil
+        }
+        return (pdfPage, background)
     }
 
     func consumeSamples(_ recognizer: StrokeGestureRecognizer) {
@@ -707,13 +749,24 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.holdDuration, execute: timer)
         }
         let points = active.builder.livePoints(predicted: predicted.map(local), predictionScale: CGFloat(settings.tipLead))
+        // Text snap: highlight the PDF text between where the stroke started and the pen.
+        if let textPage = active.textPage, let start = points.first, let end = points.last {
+            active.textLines = PDFTextSnap.lineRects(on: textPage.page, background: textPage.background,
+                                                     pageSize: active.pageView.frame.size, from: start.location, to: end.location)
+            if !active.textLines.isEmpty {
+                activeStroke = active
+                liveInk.showLiveHighlight(lines: active.textLines.map(PDFTextSnap.highlightPoints), color: active.displayColor, pageOrigin: origin)
+                return
+            }
+        }
         activeStroke = active
         liveInk.showLiveStroke(points, color: active.displayColor, tool: active.tool, pageOrigin: origin)
     }
 
     /// The pen has held still: if the stroke looks like a shape, replace it with a clean one.
     func snapToShape() {
-        guard var active = activeStroke, active.shape == nil else { return }
+        // A highlight snapped to text stays on the text.
+        guard var active = activeStroke, active.shape == nil, active.textLines.isEmpty else { return }
         let points = active.builder.finishedPoints()
         guard let pen = points.last?.location,
               let shape = ShapeRecognizer.recognize(points.map(\.location), linesOnly: active.tool == .highlighter) else { return }
@@ -730,6 +783,10 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         guard var active = activeStroke else { return }
         activeStroke = nil
         active.holdTimer?.cancel()
+        if !active.textLines.isEmpty {
+            finishTextHighlight(active)
+            return
+        }
         var points = active.builder.finishedPoints()
         if let shape = active.shape, let snapped = active.snapped {
             points = ShapeRecognizer.points(for: shape, width: snapped.width)
@@ -744,6 +801,21 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         let pieces = place(toContent(points, from: origin), tool: active.tool, color: active.color, createdAt: Date())
         let handoffID = UUID()
         liveInk.handOff(id: handoffID, points: points, color: active.displayColor, tool: active.tool, pageOrigin: origin)
+        document.addStroke(pieces)
+        waitForTiles(handoffID, toShow: pieces)
+    }
+
+    /// A highlight snapped to PDF text becomes one sideways highlight per text line.
+    private func finishTextHighlight(_ active: ActiveStroke) {
+        let lines = active.textLines.map(PDFTextSnap.highlightPoints)
+        let createdAt = Date()
+        let pieces = lines.map { points in
+            let stroke = Stroke(tool: .highlighter, color: active.color, points: points, createdAt: createdAt)
+            renderedStrokes[stroke.id] = RenderedStroke(stroke)
+            return NoteDocument.PlacedStroke(stroke: stroke, pageID: active.pageID)
+        }
+        let handoffID = UUID()
+        liveInk.handOffHighlight(id: handoffID, lines: lines, color: active.displayColor, pageOrigin: active.pageView.frame.origin)
         document.addStroke(pieces)
         waitForTiles(handoffID, toShow: pieces)
     }
@@ -1029,6 +1101,14 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             startDebugLongStroke()
             return
         }
+        if arguments.contains("-DebugPDF"), let page = document.pages.first, let pageView = pageViews[page.id] {
+            settings.highlighterSnapsToText = true
+            snapsHighlighterToText = true
+            debugStrokeOrigin = pageView.frame.origin
+            liveInk.rasterScale = tileRasterScale
+            CADisplayLink(target: self, selector: #selector(stepDebugPDF(_:))).add(to: .main, forMode: .common)
+            return
+        }
         if arguments.contains("-DebugShapes"), let page = document.pages.first, let pageView = pageViews[page.id] {
             debugStrokeOrigin = CGPoint(x: pageView.frame.minX + 80, y: pageView.frame.minY + 300)
             liveInk.rasterScale = tileRasterScale
@@ -1083,15 +1163,49 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         }
     }
 
+    /// `-DebugPDF` (with `-SeedPDF`): a highlighter stroke across line 2 of the PDF's text, with
+    /// text snap on (it becomes a neat highlight of that line), a freehand highlight in the
+    /// margin (stays freehand), and a pen underline; then exports the note and logs the file.
+    @objc private func stepDebugPDF(_ link: CADisplayLink) {
+        debugStep += 1
+        let t = Double(debugStep) / 60
+        let o = debugStrokeOrigin
+        let line = DemoPDF.lineOrigin(1)
+        func pen(_ x: CGFloat, _ y: CGFloat) {
+            add([.init(location: CGPoint(x: o.x + x, y: o.y + y), force: 0.3, estimationIndex: nil)], forceUpdates: [], predicted: [])
+        }
+        switch t {
+        case 1..<1.02: activeStroke = debugStroke(tool: .highlighter)
+        case 1.02..<1.6: pen(line.x + 10 + 260 * (t - 1) / 0.6, line.y - 4 + 3 * sin(t * 20))
+        case 1.6..<1.62: finishStroke()
+        case 2..<2.02: activeStroke = debugStroke(tool: .highlighter)
+        case 2.02..<2.5: pen(450 + 100 * (t - 2) / 0.5, 600)
+        case 2.5..<2.52: finishStroke()
+        case 3..<3.02: activeStroke = debugStroke(tool: .pen)
+        case 3.02..<3.5: pen(DemoPDF.lineOrigin(3).x + 200 * (t - 3) / 0.5, DemoPDF.lineOrigin(3).y + 5)
+        case 3.5..<3.52: finishStroke()
+        case 4.5..<4.52:
+            link.invalidate()
+            Task {
+                let note = NotebookFolder.StoredNote(url: await document.currentURL(), record: document.note)
+                let url = try? await NoteExport.pdf(of: [note], named: "Export Test", options: NoteExport.Options(), folder: document.folder)
+                NSLog("DebugPDF exported %@", url?.path(percentEncoded: false) ?? "nothing")
+            }
+        default: break
+        }
+    }
+
     func debugStroke(tool: InkTool) -> ActiveStroke? {
         guard let page = document.pages.first, let pageView = pageViews[page.id] else { return nil }
         let presets = tool == .highlighter ? settings.highlighter : settings.pen
-        return ActiveStroke(pageID: page.id, pageView: pageView, tool: tool,
-                            builder: StrokeBuilder(baseWidth: presets.currentSize, curve: settings.pressureCurve,
-                                                   smoothing: CGFloat(settings.smoothing) / scrollView.zoomScale,
-                                                   pressureSmoothing: settings.pressureSmoothing / scrollView.zoomScale),
-                            color: tool == .pen ? .red : presets.currentColor,
-                            displayColor: tool == .pen ? .red : presets.currentColor)
+        var stroke = ActiveStroke(pageID: page.id, pageView: pageView, tool: tool,
+                                  builder: StrokeBuilder(baseWidth: presets.currentSize, curve: settings.pressureCurve,
+                                                         smoothing: CGFloat(settings.smoothing) / scrollView.zoomScale,
+                                                         pressureSmoothing: settings.pressureSmoothing / scrollView.zoomScale),
+                                  color: tool == .pen ? .red : presets.currentColor,
+                                  displayColor: tool == .pen ? .red : presets.currentColor)
+        if tool == .highlighter { stroke.textPage = textSnapPage(page) }
+        return stroke
     }
 
     /// `-DebugLongStroke`: three seconds of cursive at the Pencil's 240 samples per second,

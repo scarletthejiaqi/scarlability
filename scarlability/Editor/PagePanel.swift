@@ -121,15 +121,19 @@ final class PageThumbnails {
             }
         }
         var background: CGImage?
-        if case .image(let fileName)? = page.record.background {
-            background = await document.loadImage(named: fileName, maxPixelSize: 600)
+        var backgroundPDF: PDFBackground?
+        switch page.record.background {
+        case .image(let fileName)?: background = await document.loadImage(named: fileName, maxPixelSize: 600)
+        case .pdf(let fileName, let index)?: backgroundPDF = await document.loadPDF(named: fileName)?.page(at: index)
+        case nil: break
         }
         let content = PageContent(
             paper: page.record.paper,
             size: page.record.size,
             strokes: page.visibleStrokes.map(RenderedStroke.init),
             items: page.visibleItems.map { RenderedItem($0, image: $0.image.flatMap { pictures[$0.fileName] }) },
-            backgroundImage: background
+            backgroundImage: background,
+            backgroundPDF: backgroundPDF
         )
         let width = PagePanel.thumbnailWidth, scale = scale
         let image = await Task.detached(priority: .utility) {

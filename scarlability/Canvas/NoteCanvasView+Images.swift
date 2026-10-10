@@ -1,4 +1,5 @@
 #if os(iOS)
+import PDFKit
 import ScarlabilityKit
 import UIKit
 
@@ -7,6 +8,12 @@ extension NoteCanvasView {
     func setUpImages() {
         importer.onImages = { [weak self] images in self?.insertImages(images, at: nil) }
         importer.onScans = { [weak self] scans in self?.insertScans(scans) }
+        importer.onPDFs = { [weak self] pdfs in
+            guard let self else { return }
+            for pdf in pdfs.reversed() {
+                document.insertPDF(pdf, after: document.visiblePageID)
+            }
+        }
 
         cropDim.opacity = 0.35
         cropBright.mask = cropMask
@@ -107,6 +114,33 @@ extension NoteCanvasView {
             for page in document.pages where page.record.background == .image(fileName: fileName)
                 || page.visibleItems.contains(where: { $0.image?.fileName == fileName }) {
                 updateInk(onPage: page.id, changedRect: nil)
+            }
+        }
+    }
+
+    /// Opens an imported PDF in the background, then redraws the pages showing it. With the
+    /// highlighter's text snap on, also opens it to find its text.
+    func loadPDF(_ fileName: String) {
+        if pdfs[fileName] == nil, !loadingPDFs.contains(fileName) {
+            loadingPDFs.insert(fileName)
+            Task {
+                let file = await document.loadPDF(named: fileName)
+                loadingPDFs.remove(fileName)
+                guard let file, pdfs[fileName] == nil else { return }
+                pdfs[fileName] = file
+                for page in document.pages {
+                    if case .pdf(fileName, _)? = page.record.background {
+                        updateInk(onPage: page.id, changedRect: nil)
+                    }
+                }
+            }
+        }
+        if settings.highlighterSnapsToText, textPDFs[fileName] == nil, !loadingTextPDFs.contains(fileName) {
+            loadingTextPDFs.insert(fileName)
+            Task {
+                let text = await document.textPDF(named: fileName)
+                loadingTextPDFs.remove(fileName)
+                if let text { textPDFs[fileName] = text }
             }
         }
     }

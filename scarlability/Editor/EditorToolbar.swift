@@ -78,7 +78,7 @@ struct EditorToolbar: View {
     }
 
     private var trailing: some View {
-        NoteActions(document: document, settings: settings, showsPages: $showsPages, onRename: startRenaming)
+        NoteActions(document: document, settings: settings, session: session, showsPages: $showsPages, onRename: startRenaming)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rightWidth = $0 }
     }
 
@@ -118,12 +118,14 @@ extension View {
 private struct NoteActions: View {
     let document: NoteDocument
     @Bindable var settings: ToolSettings
+    let session: EditorSession
     @Binding var showsPages: Bool
     let onRename: () -> Void
     @Environment(AppModel.self) private var model
 
     @State private var showsSettings = false
     @State private var showsPaper = false
+    @State private var exporting = false
 
     var body: some View {
         HStack(spacing: 4) {
@@ -134,6 +136,7 @@ private struct NoteActions: View {
             Menu {
                 Button("Rename Note", systemImage: "pencil", action: onRename)
                 Button("Paper", systemImage: "doc.richtext") { showsPaper = true }
+                Button("Export as PDF…", systemImage: "square.and.arrow.up") { exporting = true }
                 Button("Settings", systemImage: "gearshape") { showsSettings = true }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -143,6 +146,12 @@ private struct NoteActions: View {
             .accessibilityLabel("More")
             .popover(isPresented: $showsPaper) {
                 PaperSettingsView(document: document)
+            }
+            .sheet(isPresented: $exporting) {
+                if let folder = model.notesFolder {
+                    ExportSheet(source: .document(document, currentPage: session.visiblePageID.flatMap { document.pageIndex($0) }),
+                                folder: folder)
+                }
             }
             .popover(isPresented: $showsSettings) {
                 EditorSettingsView(settings: settings, folderName: model.folderName) {
@@ -159,10 +168,11 @@ private struct NoteActions: View {
         .frame(height: 52)
         .floatingCard(cornerRadius: 14)
         #if DEBUG
-        // `-DebugShowSettings` / `-DebugShowPaper` open those popovers.
+        // `-DebugShowSettings` / `-DebugShowPaper` / `-DebugShowExport` open those.
         .onAppear {
             showsSettings = ProcessInfo.processInfo.arguments.contains("-DebugShowSettings")
             showsPaper = ProcessInfo.processInfo.arguments.contains("-DebugShowPaper")
+            exporting = ProcessInfo.processInfo.arguments.contains("-DebugShowExport")
         }
         #endif
     }
@@ -273,7 +283,7 @@ private struct InsertMenu: View {
             Button("Photos", systemImage: "photo.on.rectangle") { session.send(.insertImage(.photos)) }
             Button("Take Photo", systemImage: "camera") { session.send(.insertImage(.camera)) }
             Button("Scan Document", systemImage: "doc.viewfinder") { session.send(.insertImage(.scanner)) }
-            Button("Files", systemImage: "folder") { session.send(.insertImage(.files)) }
+            Button("PDF or Image from Files", systemImage: "folder") { session.send(.insertImage(.files)) }
             Button("Paste", systemImage: "doc.on.clipboard") { session.send(.insertImage(.paste)) }
         } label: {
             Image(systemName: "plus.circle")
@@ -305,6 +315,14 @@ private struct ToolOptions: View {
                 presetOptions(\.pen, sizeRange: ToolSettings.penSizeRange)
             case .highlighter:
                 presetOptions(\.highlighter, sizeRange: ToolSettings.highlighterSizeRange)
+                separator
+                Toggle(isOn: $settings.highlighterSnapsToText) {
+                    Label("Snap to Text", systemImage: "text.alignleft")
+                }
+                .toggleStyle(.button)
+                .font(.subheadline)
+                .fixedSize()
+                .accessibilityHint("On PDFs, highlights the text you go over, line by line")
             case .text:
                 textOptions
             case .eraser:

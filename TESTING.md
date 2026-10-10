@@ -147,6 +147,21 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] Long strokes (a whole line of handwriting without lifting) stay just as smooth at the end as at the start.
 - [ ] Rotate to landscape: the palette is centered, everything fits.
 
+## 13c. PDFs (M5)
+- [ ] **Library → + New → Import PDF…** Pick a PDF in Files. It becomes a note named after the file, with one page per PDF page at the PDF's own size, and opens.
+- [ ] **From another app:** in Files (or Mail, Safari…) open a PDF's Share menu and choose **Scarlability**. It's imported as a new note and opens.
+- [ ] **Into a note:** **⊕ → PDF or Image from Files** and pick a PDF. Its pages are added after the page on screen.
+- [ ] **Sharp:** zoom in on PDF text. It stays sharp (not blurry).
+- [ ] **Annotate:** pen, highlighter, eraser, text, images and lasso all work on PDF pages. The PDF itself never changes.
+- [ ] Highlights over PDF text keep the text black (like a real highlighter), not faded.
+- [ ] **Snap to Text:** with the highlighter, tap **Snap to Text** (in its row). Drag across a line of PDF text: it highlights exactly that text, line by line, while you drag. Drag over empty space and it stays a normal highlight. Turn it off for freehand.
+- [ ] Imported PDFs don't get an extra blank page at the end. **+** in the page panel still adds one.
+- [ ] **Export (one note):** **⋯ → Export as PDF…** Choose **All / This Page / Custom** (like "1-3, 5"), and **Include Paper** on or off, then **Export**. The Share menu opens: Save to Files, AirDrop, Mail…
+- [ ] Open the exported PDF in Files: text you typed, PDF text and handwriting are sharp when zoomed. You can select the PDF's text.
+- [ ] **Include Paper off:** no lines and white pages; white-on-dark ink comes out black.
+- [ ] **Export (library):** long-press a note → **Export as PDF…** Or **⋯ → Select Notes**, pick several, **Export**, then **One PDF** or **A PDF per Note**.
+- [ ] Library thumbnails and the page panel show the PDF pages.
+
 ## 14. Questions to answer while testing
 1. **Pressure feel:** too subtle, too strong, or right compared to Notability?
 2. **Smoothing:** too much (letters look rounded), too little (still bumpy), or right?

@@ -7,6 +7,11 @@ struct RootView: View {
     var body: some View {
         #if os(iOS)
         content
+            .onOpenURL { url in
+                if url.pathExtension.lowercased() == "pdf" {
+                    model.importPDF(from: url)
+                }
+            }
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active {
                     // Write pending changes before the app might be suspended.

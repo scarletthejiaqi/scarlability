@@ -123,6 +123,8 @@ final class ToolSettings {
     var eraserMode: EraserMode { didSet { save() } }
     /// The eraser only removes highlights, leaving pen ink alone.
     var erasesHighlighterOnly: Bool { didSet { save() } }
+    /// On PDF pages, the highlighter highlights the text it goes over, line by line.
+    var highlighterSnapsToText: Bool { didSet { save() } }
     var eraserSizes: [Double] { didSet { save() } }
     var selectedEraserSize: Int { didSet { save() } }
     var selectMode: SelectMode { didSet { save() } }
@@ -175,6 +177,7 @@ final class ToolSettings {
         highlighter = stored.highlighter
         eraserMode = stored.eraserMode
         erasesHighlighterOnly = stored.erasesHighlighterOnly
+        highlighterSnapsToText = stored.highlighterSnapsToText ?? false
         eraserSizes = stored.eraserSizes
         selectedEraserSize = stored.selectedEraserSize
         selectMode = stored.selectMode
@@ -237,6 +240,7 @@ final class ToolSettings {
         var smoothing: Double?
         var fountainSensitivity: Double?
         var tipLead: Double?
+        var highlighterSnapsToText: Bool?
 
         static let defaults = Stored(
             tool: .pen,
@@ -256,7 +260,8 @@ final class ToolSettings {
             penStyle: .standard,
             smoothing: ToolSettings.defaultSmoothing,
             fountainSensitivity: PressureCurve.defaultFountainSensitivity,
-            tipLead: ToolSettings.defaultTipLead
+            tipLead: ToolSettings.defaultTipLead,
+            highlighterSnapsToText: false
         )
 
         func validated() -> Stored? {
@@ -295,7 +300,8 @@ final class ToolSettings {
             penStyle: penStyle,
             smoothing: smoothing,
             fountainSensitivity: fountainSensitivity,
-            tipLead: tipLead
+            tipLead: tipLead,
+            highlighterSnapsToText: highlighterSnapsToText
         )
         defaults.set(try? JSONEncoder().encode(stored), forKey: Self.storageKey)
     }

@@ -87,6 +87,30 @@ final class LiveInk {
         }
     }
 
+    /// A highlight snapped to PDF text: one sideways band per text line (page coordinates).
+    func showLiveHighlight(lines: [[InkPoint]], color: InkColor, pageOrigin: CGPoint) {
+        let item = Item(path: Self.highlightPath(lines), color: color.cgColor, tool: .highlighter, pageOrigin: pageOrigin)
+        liveHighlights = placeHighlight(item, color: color, reusing: liveHighlights, growing: true)
+    }
+
+    /// Like `handOff`, for a highlight snapped to PDF text.
+    func handOffHighlight(id: UUID, lines: [[InkPoint]], color: InkColor, pageOrigin: CGPoint) {
+        let item = Item(path: Self.highlightPath(lines), color: color.cgColor, tool: .highlighter, pageOrigin: pageOrigin)
+        handoffs[id] = placeHighlight(item, color: color, reusing: [], growing: false)
+        clearLiveStroke()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.handoffTimeout) { [weak self] in
+            self?.endHandOff(id)
+        }
+    }
+
+    private static func highlightPath(_ lines: [[InkPoint]]) -> CGPath {
+        let path = CGMutablePath()
+        for line in lines {
+            path.addPath(StrokeGeometry.chiselPath(for: line))
+        }
+        return path
+    }
+
     func clearLiveStroke() {
         livePen.reset()
         liveHighlights.forEach { $0.removeFromSuperlayer() }

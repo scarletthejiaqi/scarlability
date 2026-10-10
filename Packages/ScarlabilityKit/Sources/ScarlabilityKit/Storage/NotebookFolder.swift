@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Reads and writes notes in the app's notes folder (normally `iCloud Drive/Scarlability`).
@@ -30,6 +31,11 @@ public struct NotebookFolder: Sendable {
         /// The note's package.
         public var url: URL
         public var record: NoteRecord
+
+        public init(url: URL, record: NoteRecord) {
+            self.url = url
+            self.record = record
+        }
 
         public var id: URL { url }
     }
@@ -132,6 +138,75 @@ public struct NotebookFolder: Sendable {
     public func loadImageData(named fileName: String, inNoteAt noteURL: URL) -> Data? {
         let url = noteURL.appending(path: "Images/\(fileName)")
         return try? coordinatedRead(url) { try Data(contentsOf: $0) }
+    }
+
+    // MARK: - PDFs
+
+    /// Saves an imported PDF into the note package's PDFs folder.
+    public func savePDF(_ data: Data, named fileName: String, inNoteAt noteURL: URL) throws {
+        try coordinatedWrite(to: noteURL.appending(path: "PDFs/\(fileName)"), data: data)
+    }
+
+    public func loadPDFData(named fileName: String, inNoteAt noteURL: URL) -> Data? {
+        let url = noteURL.appending(path: "PDFs/\(fileName)")
+        return try? coordinatedRead(url) { try Data(contentsOf: $0) }
+    }
+
+    /// Makes a new note from a PDF: one page per PDF page, each the PDF page's size, on plain
+    /// white paper, ready to write on. Returns nil if the data isn't a PDF.
+    public func createNote(fromPDF data: Data, title: String, inSubject subject: String?) throws -> StoredNote? {
+        guard let file = PDFFile(data: data) else { return nil }
+        var note = try createNote(title: title, inSubject: subject)
+        let fileName = "\(UUID().uuidString).pdf"
+        try savePDF(data, named: fileName, inNoteAt: note.url)
+        for index in 0..<file.pageCount {
+            guard let page = file.page(at: index) else { continue }
+            var record = PageRecord(sortKey: Double(index + 1), size: page.size, paper: PaperStyle(template: .blank, color: .white))
+            record.background = .pdf(fileName: fileName, pageIndex: index)
+            try save(record, inNoteAt: note.url)
+        }
+        if let first = file.page(at: 0) {
+            note.record.defaultPageSize = first.size
+            note.record.defaultPaper = PaperStyle(template: .blank, color: .white)
+            try save(note.record, at: note.url)
+        }
+        return note
+    }
+
+    // MARK: - Rendering whole notes
+
+    /// Everything each page of a saved note shows, merged from every device, with its pictures
+    /// and PDF pages loaded: for exporting and thumbnails.
+    /// - Parameter pageLimit: Only the first this many pages.
+    public func renderPages(inNoteAt noteURL: URL, pageLimit: Int = .max, imageSize: Int = 2400) throws -> [PageContent] {
+        let pages = try loadPages(inNoteAt: noteURL).prefix(pageLimit)
+        var images: [String: CGImage] = [:]
+        var pdfs: [String: PDFFile] = [:]
+        func image(_ name: String) -> CGImage? {
+            if let cached = images[name] { return cached }
+            let loaded = loadImageData(named: name, inNoteAt: noteURL).flatMap { ImageLoading.cgImage(from: $0, maxPixelSize: imageSize) }
+            images[name] = loaded
+            return loaded
+        }
+        func pdf(_ name: String) -> PDFFile? {
+            if let cached = pdfs[name] { return cached }
+            let loaded = loadPDFData(named: name, inNoteAt: noteURL).flatMap(PDFFile.init(data:))
+            pdfs[name] = loaded
+            return loaded
+        }
+        return pages.map { page in
+            let items = ItemMerge.visibleItems(from: page.items.values).map { item in
+                RenderedItem(item, image: item.image.flatMap { image($0.fileName) })
+            }
+            var content = PageContent(paper: page.record.paper, size: page.record.size,
+                                      strokes: InkMerge.visibleStrokes(from: page.inks.values).map(RenderedStroke.init), items: items)
+            switch page.record.background {
+            case .image(let fileName)?: content.backgroundImage = image(fileName)
+            case .pdf(let fileName, let index)?: content.backgroundPDF = pdf(fileName)?.page(at: index)
+            case nil: break
+            }
+            return content
+        }
     }
 
     // MARK: - Layout

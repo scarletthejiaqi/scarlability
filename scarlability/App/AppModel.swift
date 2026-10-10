@@ -17,6 +17,11 @@ final class AppModel {
     var openDocument: NoteDocument?
     let toolSettings = ToolSettings()
     var folderName: String? { folderAccess?.displayName }
+    /// The notes folder, once it's open.
+    var notesFolder: NotebookFolder? {
+        if case .ready(let library) = state { return library.folder }
+        return nil
+    }
 
     private var folderAccess: FolderAccess?
 
@@ -72,6 +77,20 @@ final class AppModel {
         }
     }
 
+    /// A PDF opened in the app from elsewhere ("Open in Scarlability"): it becomes a new note,
+    /// which opens.
+    func importPDF(from url: URL) {
+        guard case .ready(let library) = state else { return }
+        Task {
+            guard let note = await library.importPDFs([url]).first else { return }
+            if openDocument != nil {
+                closeDocument()
+                try? await Task.sleep(for: .milliseconds(400))
+            }
+            openNote(note)
+        }
+    }
+
     /// Saves and closes the open note, and refreshes the library (titles, thumbnails).
     func closeDocument() {
         openDocument?.saveNow()
@@ -94,6 +113,15 @@ final class AppModel {
             let arguments = ProcessInfo.processInfo.arguments
             if arguments.contains("-SeedLibrary") {
                 await library.seedDemoLibraryIfEmpty()
+            }
+            // `-SeedPDF`: import a demo lecture PDF as a new note and open it.
+            if arguments.contains("-SeedPDF") {
+                let url = FileManager.default.temporaryDirectory.appending(path: "Calculus Lecture.pdf")
+                try? DemoPDF.data().write(to: url)
+                if let note = await library.importPDFs([url]).first {
+                    openNote(note)
+                }
+                return
             }
             // For the canvas debug scenarios: open (or make) a note right away.
             if arguments.contains("-OpenFirstNote") {

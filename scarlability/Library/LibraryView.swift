@@ -1,6 +1,7 @@
 #if os(iOS)
 import ScarlabilityKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Notability-style library: the sidebar (settings, search, Notes, Folders) on the left, and the
 /// selected notes as cards on the right.
@@ -470,6 +471,8 @@ private struct NotesBrowser: View {
     @State private var renameText = ""
     @State private var moving: [NotebookFolder.StoredNote] = []
     @State private var creatingFolder = false
+    @State private var importingPDF = false
+    @State private var exporting: [NotebookFolder.StoredNote] = []
     @State private var confirmingEmpty = false
     @State private var deletedNoteActions: NotebookFolder.StoredNote?
 
@@ -530,6 +533,18 @@ private struct NotesBrowser: View {
         .sheet(isPresented: $creatingFolder) {
             NewFolderSheet(library: library, kind: .folder(inGroup: nil))
         }
+        .sheet(isPresented: Binding(get: { !exporting.isEmpty }, set: { if !$0 { exporting = [] } })) {
+            ExportSheet(source: .notes(exporting), folder: library.folder)
+        }
+        .fileImporter(isPresented: $importingPDF, allowedContentTypes: [.pdf], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result, !urls.isEmpty else { return }
+            Task {
+                let notes = await library.importPDFs(urls)
+                if notes.count == 1, let note = notes.first {
+                    model.openNote(note)
+                }
+            }
+        }
         .confirmationDialog("Delete everything in Recently Deleted?", isPresented: $confirmingEmpty, titleVisibility: .visible) {
             Button("Delete Forever", role: .destructive) { Task { await library.emptyRecentlyDeleted() } }
         } message: {
@@ -582,6 +597,8 @@ private struct NotesBrowser: View {
                 } else {
                     Button("Favorite") { Task { await library.setFavorite(true, chosen); finishSelecting() } }
                         .disabled(chosen.isEmpty)
+                    Button("Export") { exporting = chosen }
+                        .disabled(chosen.isEmpty)
                     Button("Move") { moving = chosen }
                         .disabled(chosen.isEmpty)
                     Button("Delete", role: .destructive) { Task { await library.delete(chosen); finishSelecting() } }
@@ -613,6 +630,7 @@ private struct NotesBrowser: View {
                 if !inRecentlyDeleted {
                     Menu {
                         Button("Note", systemImage: "square.and.pencil") { newNote() }
+                        Button("Import PDF…", systemImage: "doc.badge.plus") { importingPDF = true }
                         Button("Folder", systemImage: "folder.badge.plus") { creatingFolder = true }
                     } label: {
                         Label("New", systemImage: "plus")
@@ -691,6 +709,7 @@ private struct NotesBrowser: View {
             }
             Button("Move to…", systemImage: "folder") { moving = [note] }
             Button("Duplicate", systemImage: "plus.square.on.square") { Task { await library.duplicate(note) } }
+            Button("Export as PDF…", systemImage: "square.and.arrow.up") { exporting = [note] }
             Button("Delete", systemImage: "trash", role: .destructive) { Task { await library.delete([note]) } }
         }
     }
