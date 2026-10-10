@@ -406,7 +406,7 @@ final class NoteDocument {
         insertPages(fileNames.map { fileName in
             var record = PageRecord(sortKey: 0, size: note.defaultPageSize, paper: PaperStyle(template: .blank, color: .white))
             record.background = .image(fileName: fileName)
-            return record
+            return (record, DeviceInk(), DeviceItems())
         }, after: pageID)
     }
 
@@ -416,8 +416,19 @@ final class NoteDocument {
     func insertPDF(_ data: Data, after pageID: UUID?) -> Bool {
         guard let file = PDFFile(data: data) else { return false }
         let fileName = "\(UUID().uuidString).pdf"
+        savePDFFile(data, named: fileName, file: file)
+        insertPages((0..<file.pageCount).compactMap { index in
+            guard let page = file.page(at: index) else { return nil }
+            var record = PageRecord(sortKey: 0, size: page.size, paper: PaperStyle(template: .blank, color: .white))
+            record.background = .pdf(fileName: fileName, pageIndex: index)
+            return (record, DeviceInk(), DeviceItems())
+        }, after: pageID)
+        return true
+    }
+
+    /// Saves a PDF into the note (before the pages that show it, on the same queue).
+    private func savePDFFile(_ data: Data, named fileName: String, file: PDFFile) {
         let folder = folder, location = location
-        // Saved before the pages that show it, on the same queue.
         NotesIO.queue.async {
             do {
                 guard let noteURL = location.resolved() else { return }
@@ -428,31 +439,136 @@ final class NoteDocument {
         }
         pdfFiles[fileName] = file
         pdfData[fileName] = data
-        insertPages((0..<file.pageCount).compactMap { index in
-            guard let page = file.page(at: index) else { return nil }
-            var record = PageRecord(sortKey: 0, size: page.size, paper: PaperStyle(template: .blank, color: .white))
-            record.background = .pdf(fileName: fileName, pageIndex: index)
-            return record
-        }, after: pageID)
-        return true
     }
 
-    /// Inserts new, saved pages after a page (or before the blank last page), in order.
-    private func insertPages(_ records: [PageRecord], after pageID: UUID?) {
-        guard !records.isEmpty else { return }
+    /// Inserts new, saved pages after a page (or before the blank last page), in order, and
+    /// returns their IDs.
+    @discardableResult
+    private func insertPages(_ new: [(record: PageRecord, ink: DeviceInk, items: DeviceItems)], after pageID: UUID?) -> [UUID] {
+        guard !new.isEmpty else { return [] }
         let index = pageID.flatMap { pageIndex($0) } ?? max(pages.count - 2, 0)
+        // Adding after the blank last page makes it a real page, so the order stays.
+        if pages.indices.contains(index), !pages[index].isSaved {
+            pages[index].isSaved = true
+            pageRecordsToSave.insert(pages[index].id)
+        }
         let start = pages.indices.contains(index) ? pages[index].record.sortKey : 0
         let end = index + 1 < pages.count ? pages[index + 1].record.sortKey : start + 1
-        for (offset, var record) in records.enumerated() {
-            record.sortKey = start + (end - start) * Double(offset + 1) / Double(records.count + 1)
-            pages.insert(Page(record: record, ownInk: DeviceInk(), otherInks: [:], isSaved: true), at: min(index + 1 + offset, pages.count))
+        var ids: [UUID] = []
+        for (offset, page) in new.enumerated() {
+            var record = page.record
+            record.sortKey = start + (end - start) * Double(offset + 1) / Double(new.count + 1)
+            pages.insert(Page(record: record, ownInk: page.ink, otherInks: [:], ownItems: page.items, isSaved: true),
+                         at: min(index + 1 + offset, pages.count))
             pageRecordsToSave.insert(record.id)
+            if !page.ink.strokes.isEmpty { inkToSave.insert(record.id) }
+            if !page.items.items.isEmpty { itemsToSave.insert(record.id) }
+            ids.append(record.id)
         }
         note.modifiedAt = Date()
         noteNeedsSave = true
         scheduleSave()
         _ = normalizeTrailingPages()
         onChange?(.pagesChanged)
+        return ids
+    }
+
+    // MARK: - Page panel
+
+    /// Adds a blank page right after a page (the page's ⋯ menu › Add page) and returns its ID.
+    func addPage(after pageID: UUID) -> UUID? {
+        insertPages([(PageRecord(sortKey: 0, size: note.defaultPageSize, paper: note.defaultPaper), DeviceInk(), DeviceItems())],
+                    after: pageID).first
+    }
+
+    /// Everything on these pages (in note order), with the pictures and PDFs they use, for Copy.
+    func copyPages(_ ids: Set<UUID>) async -> CopiedPages? {
+        var copied: [CopiedPages.Page] = []
+        var files: [String: Data] = [:]
+        for page in pages where ids.contains(page.id) {
+            guard let entry = try? CopiedPages.Page(size: page.record.size, paper: page.record.paper, background: page.record.background,
+                                                     strokes: page.visibleStrokes, items: page.visibleItems) else { continue }
+            copied.append(entry)
+            for name in CopiedPages.fileNames(background: page.record.background, items: page.visibleItems) where files[name] == nil {
+                if case .pdf(name, _)? = page.record.background {
+                    _ = await loadPDF(named: name)
+                    files[name] = pdfData[name]
+                } else {
+                    let folder = folder, location = location
+                    files[name] = (try? await NotesIO.run { folder.loadImageData(named: name, inNoteAt: location.url) }) ?? nil
+                }
+            }
+        }
+        return copied.isEmpty ? nil : CopiedPages(pages: copied, files: files)
+    }
+
+    /// Pastes copied pages after a page, as new pages of this note (its files saved into it).
+    @discardableResult
+    func pastePages(_ copied: CopiedPages, after pageID: UUID?, savingFiles: Bool = true) -> [UUID] {
+        let fresh = copied.freshPages()
+        if savingFiles {
+            let pdfNames = Set(fresh.compactMap { page -> String? in
+                if case .pdf(let name, _)? = page.record.background { return name }
+                return nil
+            })
+            for (name, data) in copied.files {
+                if pdfNames.contains(name) {
+                    if let file = PDFFile(data: data) { savePDFFile(data, named: name, file: file) }
+                } else {
+                    saveImageFile(data, named: name)
+                }
+            }
+        }
+        return insertPages(fresh.map { ($0.record, $0.ink, $0.items) }, after: pageID)
+    }
+
+    /// Copies pages, placing the copies right after the last of them.
+    func duplicatePages(_ ids: Set<UUID>) async -> [UUID] {
+        guard let copied = await copyPages(ids), let last = pages.last(where: { ids.contains($0.id) }) else { return [] }
+        return pastePages(copied, after: last.id, savingFiles: false)
+    }
+
+    func deletePages(_ ids: Set<UUID>) {
+        for id in ids {
+            deletePage(id)
+        }
+    }
+
+    /// Bookmarks pages (or takes their bookmarks off), so the page panel can show just those.
+    func setBookmarked(_ bookmarked: Bool, pages ids: Set<UUID>) {
+        for id in ids {
+            guard let index = pageIndex(id) else { continue }
+            pages[index].record.bookmarkedAt = bookmarked ? Date() : nil
+            // A bookmarked blank last page is a real page.
+            pages[index].isSaved = true
+            pageRecordsToSave.insert(id)
+        }
+        if normalizeTrailingPages() {
+            onChange?(.pagesChanged)
+        }
+        scheduleSave()
+    }
+
+    /// Removes everything written, typed and placed on a page (undo puts it back).
+    func clearPage(_ id: UUID) {
+        guard let page = pages.first(where: { $0.id == id }) else { return }
+        apply(Edit(removed: page.visibleStrokes.map { PlacedStroke(stroke: $0, pageID: id) },
+                   items: page.visibleItems.map { ItemEdit(pageID: id, before: $0, after: nil) }))
+    }
+
+    /// The pages whose typed text, or PDF text, contains `query` (handwriting can't be searched).
+    func pagesMatching(_ query: String) async -> Set<UUID> {
+        var matches: Set<UUID> = []
+        for page in pages {
+            if page.visibleItems.contains(where: { $0.text?.plainText.localizedCaseInsensitiveContains(query) == true }) {
+                matches.insert(page.id)
+            } else if case .pdf(let name, let index)? = page.record.background,
+                      let text = await textPDF(named: name)?.page(at: index)?.string,
+                      text.localizedCaseInsensitiveContains(query) {
+                matches.insert(page.id)
+            }
+        }
+        return matches
     }
 
     /// An imported PDF in the note, opened once.

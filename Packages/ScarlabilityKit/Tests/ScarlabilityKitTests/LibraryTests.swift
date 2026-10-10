@@ -206,3 +206,32 @@ struct SyncTests {
         #expect(try mine.loadLibrary().downloading == 1)
     }
 }
+
+struct CopiedPagesTests {
+    @Test func pastedPagesAreIndependentCopies() throws {
+        let strokes = DemoInk.strokes()
+        let text = PageItem(kind: .text(TextContent(runs: [TextRun(text: "Hello")])), frame: CGRect(x: 10, y: 10, width: 100, height: 30))
+        let picture = PageItem(kind: .image(ImageContent(fileName: "a.jpg")), frame: CGRect(x: 0, y: 100, width: 50, height: 50))
+        let page = try CopiedPages.Page(size: PageSize.a4, paper: .whiteLined, background: .pdf(fileName: "s.pdf", pageIndex: 2),
+                                        strokes: strokes, items: [text, picture])
+        let copied = CopiedPages(pages: [page], files: ["a.jpg": Data([1]), "s.pdf": Data([2])])
+        let decoded = try JSONDecoder().decode(CopiedPages.self, from: JSONEncoder().encode(copied))
+        #expect(CopiedPages.fileNames(background: page.background, items: page.items) == ["a.jpg", "s.pdf"])
+
+        let first = decoded.freshPages(), second = decoded.freshPages()
+        #expect(first[0].ink.strokes.count == strokes.count)
+        #expect(first[0].ink.strokes.map(\.points) == strokes.map(\.points))
+        #expect(Set(first[0].ink.strokes.map(\.id)).isDisjoint(with: strokes.map(\.id)))
+        #expect(first[0].record.id != second[0].record.id)
+        #expect(first[0].items.items.map(\.id) != second[0].items.items.map(\.id))
+        #expect(first[0].items.items.map(\.kind) == [text.kind, picture.kind])
+        #expect(first[0].record.background == .pdf(fileName: "s.pdf", pageIndex: 2))
+    }
+
+    @Test func bookmarksAreSaved() throws {
+        var page = PageRecord(sortKey: 1, size: PageSize.a4, paper: .whiteLined)
+        page.bookmarkedAt = Date()
+        let decoded = try JSONDecoder().decode(PageRecord.self, from: JSONEncoder().encode(page))
+        #expect(decoded.isBookmarked)
+    }
+}

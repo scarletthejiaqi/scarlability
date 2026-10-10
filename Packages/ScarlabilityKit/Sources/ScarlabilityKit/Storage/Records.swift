@@ -51,6 +51,10 @@ public struct PageRecord: Codable, Identifiable, Hashable, Sendable {
     /// When the page was deleted. Deleted pages stay in the package, hidden, so a device that
     /// still has the page open can't bring it back by saving its ink.
     public var deletedAt: Date?
+    /// When the page was bookmarked in the page panel (nil if it isn't).
+    public var bookmarkedAt: Date?
+
+    public var isBookmarked: Bool { bookmarkedAt != nil }
 
     public init(id: UUID = UUID(), sortKey: Double, size: CGSize, paper: PaperStyle, createdAt: Date = Date()) {
         self.id = id

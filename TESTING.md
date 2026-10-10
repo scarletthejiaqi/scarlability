@@ -143,7 +143,11 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] **Page number** at the bottom right ("2 / 5"). The ⌃ and ⌄ arrows jump to the page above and below.
 - [ ] **Page panel:** tap the pages button (top right, two rectangles). The panel slides in from the right while the page smoothly shrinks to stay right against it (no jump, no flash). Close and reopen it: the thumbnails are there right away. The current page has a blue border. Tap a thumbnail to jump there. Write something; its thumbnail updates a moment later.
 - [ ] In the panel, the dashed **+** adds a blank page at the end and jumps to it.
-- [ ] Long-press a thumbnail → **Delete Page** → confirm. The page is gone, also after closing and reopening the note.
+- [ ] **Search** (top of the panel): type a word from typed text or from a PDF. Only pages with it stay. Clear it with ⓧ. (Handwriting isn't searched.)
+- [ ] **Bookmarks:** tap the ribbon at a page's top right; it turns blue. **All Pages ⌄ → Bookmarks** shows only bookmarked pages; **All Pages** shows everything again. Bookmarks stay after reopening the note, and sync.
+- [ ] **⋯ on a page** (bottom left of its thumbnail), opening right there: **Add Page** (after it), **Cut**, **Copy**, **Paste** (after copying, also into another note), **Duplicate**, **Bookmark**, **Clear Page** (removes writing, text and pictures; Undo brings them back), **Delete** (asks first, at the page).
+- [ ] **Select** (bottom of the panel): tap pages to pick them (blue check), then **⋯** for **Cut, Copy, Duplicate, Bookmark, Export as PDF, Delete** on all of them. **Done** ends it.
+- [ ] **⤢** (bottom right of the panel): all pages as a big grid with the same search, filter, menus and Select. Tap a page to go to it; **⤡** goes back.
 - [ ] **No lag (不拖):** write fast, long cursive lines. The line stays right under the Pencil tip; it doesn't trail behind, rubber-band (拉扯) or shrink back (往回缩) when you lift.
 - [ ] Long strokes (a whole line of handwriting without lifting) stay just as smooth at the end as at the start.
 - [ ] Rotate to landscape: the palette is centered, everything fits.
@@ -255,6 +259,7 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 48. **Deleted on the other device while open:** the note closes with a message (it's in Recently Deleted). Or keep it open?
 49. **Both devices change the same shared thing** (e.g. rename the same note at once): the newest change wins. A page deleted on one device stays deleted.
 50. **Everything opens under its button** (your request). Delete questions appear at the item. Anything that should still be a full-screen window?
+51. **Page panel:** "Create Template" (from Notability) isn't there, since templates aren't built yet. Pasted pages go after the page whose ⋯ you used; duplicates go right after the originals. Page search only finds typed text and PDF text. OK?
 
 ---
 
