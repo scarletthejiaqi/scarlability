@@ -158,6 +158,13 @@ private struct NoteActions: View {
         .padding(.horizontal, 6)
         .frame(height: 52)
         .floatingCard(cornerRadius: 14)
+        #if DEBUG
+        // `-DebugShowSettings` / `-DebugShowPaper` open those popovers.
+        .onAppear {
+            showsSettings = ProcessInfo.processInfo.arguments.contains("-DebugShowSettings")
+            showsPaper = ProcessInfo.processInfo.arguments.contains("-DebugShowPaper")
+        }
+        #endif
     }
 
     private func iconButton(_ systemImage: String, label: String, isOn: Bool = false, action: @escaping () -> Void) -> some View {
@@ -210,10 +217,10 @@ private struct ToolPalette: View {
             // Scrolls sideways when the options don't fit (text, in portrait).
             ViewThatFits(in: .horizontal) {
                 ToolOptions(settings: settings, session: session)
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, 12)
                 ScrollView(.horizontal, showsIndicators: false) {
                     ToolOptions(settings: settings, session: session)
-                        .padding(.horizontal, 14)
+                        .padding(.horizontal, 12)
                 }
             }
             .frame(height: 50)
@@ -290,9 +297,11 @@ private struct ToolOptions: View {
     @State private var editingSizeSlot: Int?
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             switch settings.tool {
             case .pen:
+                penStyleMenu
+                separator
                 presetOptions(\.pen, sizeRange: ToolSettings.penSizeRange)
             case .highlighter:
                 presetOptions(\.highlighter, sizeRange: ToolSettings.highlighterSizeRange)
@@ -314,6 +323,27 @@ private struct ToolOptions: View {
             }
         }
         .frame(height: 50)
+    }
+
+    /// Pen or Fountain Pen (钢笔). Both use the same colors and sizes.
+    private var penStyleMenu: some View {
+        Menu {
+            Picker("Pen", selection: $settings.penStyle) {
+                ForEach(PenStyle.allCases, id: \.self) { style in
+                    Label(style.title, systemImage: style.systemImage).tag(style)
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: settings.penStyle.systemImage)
+                Text(settings.penStyle == .fountain ? "Fountain" : "Pen")
+                Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
+            }
+            .font(.subheadline.weight(.medium))
+            .fixedSize()
+        }
+        .tint(.primary)
+        .accessibilityLabel("Pen type: \(settings.penStyle.title)")
     }
 
     @ViewBuilder
@@ -396,7 +426,7 @@ private struct ToolOptions: View {
     private func presetOptions(_ tool: ReferenceWritableKeyPath<ToolSettings, ToolPresets>, sizeRange: ClosedRange<Double>?,
                                onColor: ((InkColor) -> Void)? = nil) -> some View {
         let presets = settings[keyPath: tool]
-        HStack(spacing: 6) {
+        HStack(spacing: 3) {
             ForEach(presets.colors.indices, id: \.self) { slot in
                 ColorSwatch(color: presets.colors[slot], isSelected: presets.selectedColorSlot == slot)
                     .onTapGesture { tapColor(slot, of: tool, onColor: onColor) }
@@ -611,12 +641,29 @@ private struct PaperSettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 if paper.template == .lined {
-                    Picker("Line spacing", selection: $paper.lineSpacing) {
-                        Text("Narrow").tag(LineSpacing.narrow)
-                        Text("Medium").tag(LineSpacing.medium)
-                        Text("Wide").tag(LineSpacing.wide)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Line spacing")
+                            Spacer()
+                            Text(String(format: "%g mm", paper.lineSpacingMillimeters))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                            Button("Default") { paper.lineSpacingMillimeters = PaperStyle.defaultLineSpacing }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(paper.lineSpacingMillimeters == PaperStyle.defaultLineSpacing)
+                        }
+                        // In quarter millimeters (rounded here rather than with `step`, which draws a tick per step).
+                        Slider(value: Binding(get: { paper.lineSpacingMillimeters },
+                                              set: { paper.lineSpacingMillimeters = ($0 * 4).rounded() / 4 }),
+                               in: PaperStyle.lineSpacingRange) {
+                            Text("Line spacing")
+                        } minimumValueLabel: {
+                            Image(systemName: "line.3.horizontal").font(.caption)
+                        } maximumValueLabel: {
+                            Image(systemName: "line.3.horizontal").font(.title3)
+                        }
                     }
-                    .pickerStyle(.segmented)
                 }
                 HStack(spacing: 14) {
                     ForEach(InkColor.paperColors, id: \.self) { color in
@@ -641,7 +688,7 @@ private struct PaperSettingsView: View {
                 Text(appliesToWholeNote ? "All pages change, and new pages use this paper." : "Only the page in the middle of the screen changes.")
             }
         }
-        .frame(width: 380, height: 380)
+        .frame(width: 380, height: 420)
         .presentationCompactAdaptation(.popover)
         .onAppear {
             let page = document.pages.first { $0.id == document.visiblePageID } ?? document.pages.first
@@ -664,38 +711,89 @@ private struct PaperSettingsView: View {
     }
 }
 
+/// Settings: Pen Feel (笔感) with a strip to try the pen, finger drawing and the notes folder.
 struct EditorSettingsView: View {
     @Bindable var settings: ToolSettings
     let folderName: String?
     let onChangeFolder: () -> Void
 
+    @State private var clearCount = 0
+
     var body: some View {
-        Form {
-            Section {
-                HStack {
-                    Text("Less")
-                    Slider(value: $settings.pressureSensitivity, in: 0...1)
-                    Text("More")
+        VStack(spacing: 0) {
+            PenTestPad(settings: settings, clearCount: clearCount)
+                .frame(height: 150)
+                .overlay(alignment: .topLeading) {
+                    Text("Try your pen here (\(settings.penStyle.title))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(8)
+                        .allowsHitTesting(false)
                 }
-            } header: {
-                Text("Pressure sensitivity")
-            } footer: {
-                Text("How much harder pressing makes the pen line thicker.")
-            }
-            Section {
-                Toggle("Draw with finger", isOn: $settings.drawsWithFinger)
-            } footer: {
-                Text(settings.drawsWithFinger
-                     ? "One finger writes. Use two fingers to scroll and zoom."
-                     : "Only Apple Pencil writes. Fingers scroll and zoom.")
-            }
-            Section("Notes folder") {
-                Text(folderName ?? "Not chosen")
-                Button("Choose a Different Folder…", action: onChangeFolder)
+                .overlay(alignment: .topTrailing) {
+                    Button("Clear") { clearCount += 1 }
+                        .font(.caption.weight(.semibold))
+                        .padding(8)
+                }
+            Divider()
+            Form {
+                Section {
+                    FeelSlider(title: "Smoothing 平滑", value: $settings.smoothing, range: ToolSettings.smoothingRange,
+                               less: "Sharper", more: "Smoother")
+                    FeelSlider(title: "Pen pressure 压感", value: $settings.pressureSensitivity, range: 0...1,
+                               less: "Even", more: "More")
+                    FeelSlider(title: "Fountain pen pressure 钢笔压感", value: $settings.fountainSensitivity, range: 0...1,
+                               less: "Even", more: "More")
+                    FeelSlider(title: "Tip 跟手", value: $settings.tipLead, range: 0...1,
+                               less: "Steadier", more: "Closer to tip")
+                    Button("Reset Pen Feel") { settings.resetPenFeel() }
+                } header: {
+                    Text("Pen Feel")
+                } footer: {
+                    Text("Write in the strip above to try each change. Pick the pen type (Pen or Fountain) in the toolbar. "
+                         + "Tell me the numbers you like best and I'll make them the defaults.")
+                }
+                Section {
+                    Toggle("Draw with finger", isOn: $settings.drawsWithFinger)
+                } footer: {
+                    Text(settings.drawsWithFinger
+                         ? "One finger writes. Use two fingers to scroll and zoom."
+                         : "Only Apple Pencil writes. Fingers scroll and zoom.")
+                }
+                Section("Notes folder") {
+                    Text(folderName ?? "Not chosen")
+                    Button("Choose a Different Folder…", action: onChangeFolder)
+                }
             }
         }
-        .frame(width: 380, height: 420)
+        .frame(width: 400, height: 680)
         .presentationCompactAdaptation(.popover)
+    }
+}
+
+/// A Pen Feel slider with its value shown, so you can tell me which numbers feel best.
+private struct FeelSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let less: String
+    let more: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(String(format: "%.2f", value))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Text(less).font(.caption).foregroundStyle(.secondary)
+                Slider(value: $value, in: range)
+                Text(more).font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 }
 #endif

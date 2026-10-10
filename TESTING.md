@@ -21,6 +21,9 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] **No flash:** when you lift the Pencil, the line doesn't change (no bold "highlight" that then gets thinner).
 - [ ] **Pressure:** light writing is thinner, pressing hard is thicker.
 - [ ] **Lag:** when you write fast, the ink stays close to the Pencil tip.
+- [ ] **Steady tip (笔尖不动):** watch the line right behind the Pencil as you write small, fast notes. It doesn't wiggle, shift or change thickness after it's drawn.
+- [ ] **钢笔 Fountain pen:** in the pen's row tap **Pen ▾ → Fountain Pen**. Light strokes come out thin and pressing hard gives bold lines, clearly more than the normal Pen. **Pen ▾ → Pen** switches back. Both use the same colors and sizes.
+- [ ] **Pen Feel (笔感):** **⋯ → Settings**. Write in the "Try your pen here" strip at the top while moving the sliders: **Smoothing 平滑**, **Pen pressure 压感**, **Fountain pen pressure 钢笔压感**, **Tip 跟手** (Steadier ↔ Closer to tip). **Clear** empties the strip and **Reset Pen Feel** puts the sliders back. Write down the numbers you like best and tell me.
 - [ ] **Palm:** rest your hand on the screen while writing. The page doesn't move and no marks appear.
 - [ ] **Zoomed in:** zoom in and write. The ink is sharp.
 
@@ -41,11 +44,13 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] Rotate to landscape. Nothing looks broken.
 
 ## 5. Highlighter (M2)
-- [ ] Tap **Highlighter** and highlight across some writing. The yellow stays **behind** the writing.
-- [ ] Highlight the same spot twice, or cross two highlights. The color stays **even** (no darker spots once you lift).
+- [ ] Tap **Highlighter** and highlight across some writing. The yellow is a bright **荧光黄** (fluorescent yellow) and stays **behind** the writing.
+- [ ] **No flash:** lift the Pencil after highlighting. The highlight doesn't blink or get darker for a moment.
+- [ ] Highlight the same spot twice, or cross two highlights. The color stays **even**: no darker spots, not even while you're still drawing.
+- [ ] The other highlighter colors (green, blue, pink, orange) are bright fluorescent ones too.
 - [ ] It's a flat chisel tip: highlighting sideways gives a tall band, and going up and down is thinner.
 - [ ] Draw a highlight and **hold** the Pencil still at the end. It snaps to a **straight line**.
-- [ ] Colors: yellow plus the rainbow **+**. Tap the selected color again for the picker and eyedropper (取色笔).
+- [ ] Colors: 5 fluorescent colors plus **+**. Tap the selected color again for the picker and eyedropper (取色笔).
 - [ ] The 3 sizes work, and tapping the selected size again shows its slider.
 
 ## 6. Eraser (M2)
@@ -71,9 +76,15 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 ## 8. Shapes (M2)
 - [ ] With the pen, draw a rough line, circle, oval, rectangle, triangle or other polygon and **hold still about half a second**. It snaps to a clean shape.
 - [ ] Normal handwriting never snaps by accident.
+- [ ] **Drag after snapping:** draw a line, hold until it snaps, then keep the Pencil down and move it. The line's far end follows the Pencil (the start stays put). Lift to keep it.
+- [ ] **Angle lock (锁定):** while dragging, bring the line close to **flat (180°)** or **straight up (90°)**. It locks exactly flat or upright, and moving a bit further frees it.
+- [ ] Do the same with a snapped **rectangle** or **circle**: moving the Pencil turns it and makes it bigger or smaller around its middle. A rectangle locks square to the page.
+- [ ] The same works with a highlighter line, which is handy for highlighting a line of text.
 
 ## 9. Paper (M2)
-- [ ] Tap the **paper icon** (top right, next to ⋯). Switch between **Blank** and **Lined**, and try the **Narrow / Medium / Wide** line spacing.
+- [ ] **⋯ → Paper.** Switch between **Blank** and **Lined**.
+- [ ] **Line spacing:** new notes use **9 mm**, between the old Medium (8) and Wide (10). The **slider** changes it in steps of 0.25 mm and shows the number. **Default** goes back to 9 mm. Tell me the number that looks best.
+- [ ] Older notes keep their spacing until you change it (choose **Whole Note** to change them all).
 - [ ] Try the colors **White, Cream, Gray, Dark**. On Dark paper, black ink shows as **white**.
 - [ ] **Whole Note** changes every page, and new pages get it too. **This Page** changes only the page in the middle of the screen.
 
@@ -179,6 +190,12 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 32. **Deleting a page** asks first and can't be undone. Want undo for it instead of the question?
 33. **Recents** = notes you opened or changed in the last 30 days. Right window?
 34. **Folder groups** only hold folders, not notes (you chose this). Still right after using it?
+
+**From the pen-feel update** (I picked a default for each; please tell me the numbers you like):
+35. **Pen Feel sliders:** which values feel most natural? (Defaults: Smoothing 0.80, Pen pressure 0.50, Fountain pen pressure 0.80, Tip 0.60.)
+36. **Line spacing:** is 9 mm right, or which number on the slider?
+37. **Highlighter:** right yellow now? It's also a bit stronger (50% see-through instead of 38%). Too strong?
+38. **Angle lock:** lines lock within 5° of flat or upright. Too sticky or not sticky enough? Should 45° lock too?
 
 ---
 

@@ -1,24 +1,25 @@
 import CoreGraphics
 
-/// Smooths a stroke along its length, so slow and fast writing get the same amount of smoothing.
+/// Smooths a stroke's path along its length, so slow and fast writing get the same amount of
+/// smoothing.
 ///
 /// Each point becomes a Gaussian-weighted average of its neighbors within a few points of arc
-/// length. That irons out the tiny wobbles in raw Pencil samples, which otherwise read as a chain
-/// of short straight lines, while keeping the shape of the handwriting. Near the ends the window
-/// shrinks, so a stroke still starts and ends exactly where the pen touched down and lifted.
+/// length. That irons out the tiny wobbles in raw Pencil samples while keeping the shape of the
+/// handwriting. Near the ends the window shrinks, so a stroke still starts and ends exactly where
+/// the pen touched down and lifted. Widths are left alone: `StrokeBuilder` evens them out as
+/// samples arrive, so the thickness behind the pen never changes after it's drawn.
 public enum StrokeSmoothing {
-    /// Position smoothing (Gaussian σ) in *screen* points; divide by the zoom to get page points,
-    /// so smoothing feels the same at any zoom.
-    public static let screenRadius: CGFloat = 1.6
-    /// Widths are smoothed over a longer stretch, so pressure changes look even.
-    static let widthRadiusFactor: CGFloat = 2.5
+    /// Default position smoothing (Gaussian σ) in *screen* points; divide by the zoom to get page
+    /// points, so smoothing feels the same at any zoom. Kept light: the window near the pen tip
+    /// is still filling up, and the more smoothing, the more the line there shifts as you write.
+    public static let screenRadius: CGFloat = 0.8
     /// The window reaches this many σ either side.
     static let reach: CGFloat = 2.5
 
     /// How far behind the end of a stroke a point has to be for its smoothing to be final
     /// (new points at the end no longer reach it).
     public static func settledLength(radius: CGFloat) -> CGFloat {
-        reach * radius * widthRadiusFactor
+        reach * radius
     }
 
     /// - Parameter radius: Position smoothing σ in page points.
@@ -44,48 +45,33 @@ public enum StrokeSmoothing {
         guard n > 2, radius > 0 else { return points[i] }
         let total = arc[n - 1]
         // A symmetric window that never runs past either end keeps the ends in place.
-        let room = min(arc[i], total - arc[i]) / reach
-        let positionSigma = min(radius, room)
-        let widthSigma = min(radius * widthRadiusFactor, room)
-        guard widthSigma > 1e-3 else { return points[i] }
+        let sigma = min(radius, min(arc[i], total - arc[i]) / reach)
+        guard sigma > 1e-3 else { return points[i] }
 
-        let positionReach = reach * positionSigma
-        let widthReach = reach * widthSigma
-        var x: CGFloat = 0, y: CGFloat = 0, positionWeight: CGFloat = 0
-        var width: CGFloat = 0, widthWeight: CGFloat = 0
-
+        let windowReach = reach * sigma
+        var x: CGFloat = 0, y: CGFloat = 0, weight: CGFloat = 0
         func accumulate(_ j: Int) {
             let d = arc[j] - arc[i]
-            if positionSigma > 1e-3, abs(d) <= positionReach {
-                let w = exp(-d * d / (2 * positionSigma * positionSigma))
-                x += w * CGFloat(points[j].x)
-                y += w * CGFloat(points[j].y)
-                positionWeight += w
-            }
-            if abs(d) <= widthReach {
-                let w = exp(-d * d / (2 * widthSigma * widthSigma))
-                width += w * CGFloat(points[j].width)
-                widthWeight += w
-            }
+            let w = exp(-d * d / (2 * sigma * sigma))
+            x += w * CGFloat(points[j].x)
+            y += w * CGFloat(points[j].y)
+            weight += w
         }
 
         var j = i
-        while j >= 0, arc[i] - arc[j] <= widthReach {
+        while j >= 0, arc[i] - arc[j] <= windowReach {
             accumulate(j)
             j -= 1
         }
         j = i + 1
-        while j < n, arc[j] - arc[i] <= widthReach {
+        while j < n, arc[j] - arc[i] <= windowReach {
             accumulate(j)
             j += 1
         }
 
         var result = points[i]
-        if positionWeight > 0 {
-            result.x = Float(x / positionWeight)
-            result.y = Float(y / positionWeight)
-        }
-        result.width = Float(width / widthWeight)
+        result.x = Float(x / weight)
+        result.y = Float(y / weight)
         return result
     }
 }

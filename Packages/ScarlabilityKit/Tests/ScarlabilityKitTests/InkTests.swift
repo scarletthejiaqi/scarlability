@@ -21,6 +21,18 @@ struct PressureCurveTests {
         }
     }
 
+    /// The fountain pen (钢笔) goes thinner when light and thicker when firm than the normal pen.
+    @Test func fountainPenRespondsMore() {
+        let pen = PressureCurve(), fountain = PressureCurve.fountain()
+        #expect(fountain.widthFactor(forNormalizedForce: 0.05) < pen.widthFactor(forNormalizedForce: 0.05))
+        #expect(fountain.widthFactor(forNormalizedForce: 0.55) > pen.widthFactor(forNormalizedForce: 0.55))
+        var previous = 0.0
+        for force in stride(from: 0.0, through: 1.0, by: 0.01) {
+            #expect(fountain.widthFactor(forNormalizedForce: force) >= previous)
+            previous = fountain.widthFactor(forNormalizedForce: force)
+        }
+    }
+
     @Test func rangeFollowsSensitivity() {
         let curve = PressureCurve(sensitivity: 1)
         #expect(abs(curve.widthFactor(forNormalizedForce: 0) - 0.3) < 1e-9)

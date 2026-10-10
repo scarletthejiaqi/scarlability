@@ -144,11 +144,86 @@ struct ShapeRecognizerTests {
     }
 }
 
+struct ShapeAdjustingTests {
+    private func angle(of shape: ShapeRecognizer.Shape) -> CGFloat {
+        guard case .line(let a, let b) = shape else { return .nan }
+        return atan2(b.y - a.y, b.x - a.x) * 180 / .pi
+    }
+
+    @Test func lineEndFollowsThePen() {
+        let line = ShapeRecognizer.Shape.line(CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 30))
+        let moved = ShapeAdjusting.adjust(line, from: CGPoint(x: 100, y: 30), to: CGPoint(x: 120, y: 80))
+        #expect(moved == .line(CGPoint(x: 0, y: 0), CGPoint(x: 120, y: 80)))
+    }
+
+    /// Nearly flat or nearly upright locks exactly flat or upright; a bit further frees it.
+    @Test func lineLocksFlatAndUpright() {
+        let line = ShapeRecognizer.Shape.line(CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 30))
+        let start = CGPoint(x: 100, y: 30)
+        #expect(angle(of: ShapeAdjusting.adjust(line, from: start, to: CGPoint(x: 100, y: 6))) == 0)
+        #expect(angle(of: ShapeAdjusting.adjust(line, from: start, to: CGPoint(x: -100, y: 5))) == 180)
+        #expect(abs(angle(of: ShapeAdjusting.adjust(line, from: start, to: CGPoint(x: 4, y: 100))) - 90) < 1e-9)
+        let free = angle(of: ShapeAdjusting.adjust(line, from: start, to: CGPoint(x: 100, y: 12)))
+        #expect(free > 6 && free < 7)
+        // Locking keeps the length the pen gives it.
+        guard case .line(let a, let b) = ShapeAdjusting.adjust(line, from: start, to: CGPoint(x: 100, y: 6)) else { return }
+        #expect(abs(a.distance(to: b) - hypot(100, 6)) < 1e-9)
+    }
+
+    @Test func closedShapesTurnAndGrowAroundTheirCenter() throws {
+        let square = ShapeRecognizer.Shape.polygon([CGPoint(x: -10, y: -10), CGPoint(x: 10, y: -10), CGPoint(x: 10, y: 10), CGPoint(x: -10, y: 10)])
+        // Pull the corner out to twice as far, turned 30°: the square doubles and turns 30°.
+        let turned = CGPoint(x: 20 * sqrt(2) * cos(-.pi / 4 + .pi / 6), y: 20 * sqrt(2) * sin(-.pi / 4 + .pi / 6))
+        guard case .polygon(let corners) = ShapeAdjusting.adjust(square, from: CGPoint(x: 10, y: -10), to: turned) else {
+            Issue.record("not a polygon")
+            return
+        }
+        #expect(abs(corners[1].x - turned.x) < 1e-9 && abs(corners[1].y - turned.y) < 1e-9)
+        // Turned only 3°, it stays square to the page but still grows.
+        let nudged = CGPoint(x: 20 * sqrt(2) * cos(-.pi / 4 + .pi / 60), y: 20 * sqrt(2) * sin(-.pi / 4 + .pi / 60))
+        guard case .polygon(let squared) = ShapeAdjusting.adjust(square, from: CGPoint(x: 10, y: -10), to: nudged) else { return }
+        #expect(abs(squared[1].x - 20) < 1e-9 && abs(squared[1].y + 20) < 1e-9)
+    }
+}
+
 struct PaperTests {
     @Test func oldNotesWithoutLineSpacingStillOpen() throws {
         let json = #"{"template":"lined","color":{"red":255,"green":255,"blue":255,"alpha":255}}"#
         let paper = try JSONDecoder().decode(PaperStyle.self, from: Data(json.utf8))
-        #expect(paper.lineSpacing == .medium)
+        #expect(paper.lineSpacingMillimeters == 8)
+    }
+
+    @Test func namedLineSpacingsStillOpen() throws {
+        let json = #"{"template":"lined","color":{"red":255,"green":255,"blue":255,"alpha":255},"lineSpacing":"wide"}"#
+        #expect(try JSONDecoder().decode(PaperStyle.self, from: Data(json.utf8)).lineSpacingMillimeters == 10)
+    }
+
+    /// Any spacing round-trips, and the nearest named one is stored too, for older app versions.
+    @Test func lineSpacingInBetweenIsSaved() throws {
+        let paper = PaperStyle(template: .lined, color: .white, lineSpacingMillimeters: 9.25)
+        let data = try JSONEncoder().encode(paper)
+        #expect(try JSONDecoder().decode(PaperStyle.self, from: data) == paper)
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        #expect(object?["lineSpacing"] as? String == "wide")
+        #expect(PaperStyle.whiteLined.lineSpacingMillimeters == 9)
+    }
+
+    /// Live highlights are drawn solid in this color; it must match a finished highlight.
+    @Test func highlightColorOnPaperMatchesTheRenderedPage() throws {
+        let yellow = InkColor(hex: 0xF6FF00)
+        let solid = yellow.highlighted(on: .white)
+        let content = PageContent(paper: PaperStyle(template: .blank, color: .white), size: CGSize(width: 40, height: 40), strokes: [
+            RenderedStroke(Stroke(tool: .highlighter, color: yellow, points: [InkPoint(x: 5, y: 20, width: 16), InkPoint(x: 35, y: 20, width: 16)])),
+        ])
+        let image = try #require(Thumbnail.render(content, width: 40, scale: 1))
+        let context = try #require(CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                             space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: -20, y: -20, width: 40, height: 40))
+        let pixel = try #require(context.data?.assumingMemoryBound(to: UInt8.self))
+        #expect(abs(Int(pixel[0]) - Int(solid.red)) <= 2)
+        #expect(abs(Int(pixel[1]) - Int(solid.green)) <= 2)
+        #expect(abs(Int(pixel[2]) - Int(solid.blue)) <= 2)
     }
 
     @Test func blackInkTurnsWhiteOnDarkPaper() {

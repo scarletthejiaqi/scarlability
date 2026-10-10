@@ -12,6 +12,11 @@ import UIKit
 /// its paper and ink layers, so they're behind the writing like finished highlights. When the
 /// tiles have redrawn a finished stroke, its copy here fades out over a moment instead of
 /// vanishing, which hides the tiny difference in how the screen places tiles.
+///
+/// A see-through highlight drawn twice looks darker, so live highlights aren't see-through:
+/// they're the color a highlight makes on that paper, and only ever darken what's under them
+/// toward it. Over an older highlight, or over its own finished copy while it fades out, that
+/// changes nothing, so a highlight never flashes darker while you draw it or when you lift.
 final class LiveInk {
     struct Item {
         var path: CGPath
@@ -26,6 +31,7 @@ final class LiveInk {
         var layer: CALayer
         /// The page's frame, in content coordinates.
         var frame: CGRect
+        var paper: PaperStyle
     }
 
     /// Where ink may appear (all the pages), in content coordinates.
@@ -75,7 +81,7 @@ final class LiveInk {
     func showLiveStroke(_ points: [InkPoint], color: InkColor, tool: InkTool, pageOrigin: CGPoint) {
         if tool == .highlighter {
             let item = Item(path: StrokeGeometry.chiselPath(for: points), color: color.cgColor, tool: tool, pageOrigin: pageOrigin)
-            liveHighlights = placeHighlight(item, reusing: liveHighlights, growing: true)
+            liveHighlights = placeHighlight(item, color: color, reusing: liveHighlights, growing: true)
         } else {
             livePen.show(points, color: color.cgColor, pageOrigin: pageOrigin, writingArea: writingArea, rasterScale: rasterScale)
         }
@@ -94,7 +100,7 @@ final class LiveInk {
     func handOff(id: UUID, points: [InkPoint], color: InkColor, tool: InkTool, pageOrigin: CGPoint) {
         if tool == .highlighter {
             let item = Item(path: StrokeGeometry.chiselPath(for: points), color: color.cgColor, tool: tool, pageOrigin: pageOrigin)
-            handoffs[id] = placeHighlight(item, reusing: [], growing: false)
+            handoffs[id] = placeHighlight(item, color: color, reusing: [], growing: false)
         } else {
             livePen.show(points, color: color.cgColor, pageOrigin: pageOrigin, writingArea: writingArea, rasterScale: rasterScale)
             handoffs[id] = [livePen]
@@ -134,7 +140,7 @@ final class LiveInk {
     }
 
     /// A highlight is drawn in every page it overlaps, each part inside that page.
-    private func placeHighlight(_ item: Item, reusing existing: [StrokeInkLayer], growing: Bool) -> [StrokeInkLayer] {
+    private func placeHighlight(_ item: Item, color: InkColor, reusing existing: [StrokeInkLayer], growing: Bool) -> [StrokeInkLayer] {
         let bounds = item.path.boundingBoxOfPath.offsetBy(dx: item.pageOrigin.x, dy: item.pageOrigin.y)
         var layers: [StrokeInkLayer] = []
         for (index, page) in highlighterHosts(bounds).enumerated() {
@@ -142,9 +148,15 @@ final class LiveInk {
             if layer.superlayer !== page.layer {
                 page.layer.addSublayer(layer)
             }
-            layer.opacity = Float(PageRenderer.highlighterOpacity)
+            // What the highlight looks like on this paper, solid, only ever darkening what's
+            // under it (lightening, on dark paper, where highlights brighten the page).
+            var solid = item
+            solid.color = color.highlighted(on: page.paper.color).cgColor
+            layer.opacity = 1
+            layer.drawsHighlightsSolid = true
+            layer.compositingFilter = page.paper.isDark ? "lightenBlendMode" : "darkenBlendMode"
             layer.configure(writingArea: page.frame, rasterScale: rasterScale, hostOrigin: page.frame.origin)
-            layer.show([item], growing: growing)
+            layer.show([solid], growing: growing)
             layers.append(layer)
         }
         existing.dropFirst(layers.count).forEach { $0.removeFromSuperlayer() }
@@ -343,6 +355,8 @@ private final class StrokeInkLayer: CALayer {
     private var items: [LiveInk.Item] = []
     /// Text boxes and images, drawn under the strokes.
     private var objects: [(RenderedItem, CGAffineTransform)] = []
+    /// Highlights are already their final, solid color (live highlights), not see-through.
+    var drawsHighlightsSolid = false
 
     override init() {
         super.init()
@@ -422,10 +436,10 @@ private final class StrokeInkLayer: CALayer {
             ItemRenderer.draw(object, paper: nil, in: context)
             context.restoreGState()
         }
-        // Live highlighter layers are see-through themselves; anywhere else, highlights are drawn
-        // at their opacity, behind the ink.
+        // Live highlights are already their final color; anywhere else (a selection being moved),
+        // highlights are drawn at their opacity, behind the ink.
         let highlights = items.filter { $0.tool == .highlighter }
-        if opacity < 1 || highlights.isEmpty {
+        if drawsHighlightsSolid || highlights.isEmpty {
             fill(items, in: context)
         } else {
             context.saveGState()

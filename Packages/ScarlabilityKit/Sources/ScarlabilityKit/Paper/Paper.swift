@@ -8,31 +8,53 @@ public enum PaperTemplate: String, Codable, Sendable, CaseIterable {
     case dotted
 }
 
+/// The named line spacings from before spacing could be set freely (M2–M4). Files still store
+/// the nearest one, so older versions of the app can open them.
 public enum LineSpacing: String, Codable, Sendable, CaseIterable {
     case narrow
     case medium
     case wide
 
-    /// Distance between lines, in page points.
-    public var points: CGFloat {
+    public var millimeters: Double {
         switch self {
-        case .narrow: 6.5 * PaperRenderer.millimeter
-        case .medium: 8 * PaperRenderer.millimeter
-        case .wide: 10 * PaperRenderer.millimeter
+        case .narrow: 6.5
+        case .medium: 8
+        case .wide: 10
         }
+    }
+
+    static func nearest(to millimeters: Double) -> LineSpacing {
+        allCases.min { abs($0.millimeters - millimeters) < abs($1.millimeters - millimeters) }!
     }
 }
 
 public struct PaperStyle: Codable, Hashable, Sendable {
     public var template: PaperTemplate
     public var color: InkColor
-    /// Used by lined paper.
-    public var lineSpacing: LineSpacing
+    /// Distance between the lines of lined paper, in millimeters.
+    public var lineSpacingMillimeters: Double
 
-    public init(template: PaperTemplate, color: InkColor, lineSpacing: LineSpacing = .medium) {
+    /// Between the old Medium (8 mm) and Wide (10 mm); what new notes use.
+    public static let defaultLineSpacing = 9.0
+    public static let lineSpacingRange: ClosedRange<Double> = 5...14
+
+    public var lineSpacingPoints: CGFloat { CGFloat(lineSpacingMillimeters) * PaperRenderer.millimeter }
+
+    public init(template: PaperTemplate, color: InkColor, lineSpacingMillimeters: Double = PaperStyle.defaultLineSpacing) {
         self.template = template
         self.color = color
-        self.lineSpacing = lineSpacing
+        self.lineSpacingMillimeters = lineSpacingMillimeters
+    }
+
+    public init(template: PaperTemplate, color: InkColor, lineSpacing: LineSpacing) {
+        self.init(template: template, color: color, lineSpacingMillimeters: lineSpacing.millimeters)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case template
+        case color
+        case lineSpacing
+        case lineSpacingMillimeters
     }
 
     public init(from decoder: Decoder) throws {
@@ -40,7 +62,17 @@ public struct PaperStyle: Codable, Hashable, Sendable {
         template = try container.decode(PaperTemplate.self, forKey: .template)
         color = try container.decode(InkColor.self, forKey: .color)
         // Notes from before line spacing existed have medium lines.
-        lineSpacing = try container.decodeIfPresent(LineSpacing.self, forKey: .lineSpacing) ?? .medium
+        lineSpacingMillimeters = try container.decodeIfPresent(Double.self, forKey: .lineSpacingMillimeters)
+            ?? container.decodeIfPresent(LineSpacing.self, forKey: .lineSpacing)?.millimeters
+            ?? LineSpacing.medium.millimeters
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(template, forKey: .template)
+        try container.encode(color, forKey: .color)
+        try container.encode(lineSpacingMillimeters, forKey: .lineSpacingMillimeters)
+        try container.encode(LineSpacing.nearest(to: lineSpacingMillimeters), forKey: .lineSpacing)
     }
 
     public static let whiteLined = PaperStyle(template: .lined, color: .white)
@@ -59,6 +91,14 @@ extension InkColor {
     /// Relative brightness from 0 (black) to 1 (white).
     public var luminance: Double {
         (0.2126 * Double(red) + 0.7152 * Double(green) + 0.0722 * Double(blue)) / 255
+    }
+
+    /// The solid color a highlight in this color makes on paper of the given color (what the
+    /// page shows: the highlight at `PageRenderer.highlighterOpacity` over the paper).
+    public func highlighted(on paper: InkColor) -> InkColor {
+        let opacity = Double(PageRenderer.highlighterOpacity)
+        func mix(_ under: UInt8, _ over: UInt8) -> Double { (Double(under) * (1 - opacity) + Double(over) * opacity) / 255 }
+        return InkColor(srgbRed: mix(paper.red, red), green: mix(paper.green, green), blue: mix(paper.blue, blue))
     }
 
     /// The color to draw pen ink in on the given paper: black becomes white on dark paper.
@@ -101,7 +141,7 @@ public enum PaperRenderer {
                     context.move(to: CGPoint(x: area.minX, y: y))
                     context.addLine(to: CGPoint(x: area.maxX, y: y))
                 }
-                y += style.lineSpacing.points
+                y += max(style.lineSpacingPoints, 1)
             }
             context.strokePath()
         case .grid:

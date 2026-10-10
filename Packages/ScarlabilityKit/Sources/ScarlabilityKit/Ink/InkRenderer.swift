@@ -58,7 +58,7 @@ public enum PageRenderer {
 
     /// Highlights are drawn opaque into a transparency layer that's then composited at this
     /// opacity, so overlapping highlights stay one even color.
-    public static let highlighterOpacity: CGFloat = 0.38
+    public static let highlighterOpacity: CGFloat = 0.5
 
     /// The context must use page coordinates with the origin at the top-left.
     public static func draw(_ content: PageContent, layer: Layer, in context: CGContext, clip: CGRect) {

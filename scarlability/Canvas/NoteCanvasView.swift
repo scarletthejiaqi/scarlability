@@ -26,7 +26,8 @@ struct NoteCanvas: UIViewRepresentable {
 /// - Apple Pencil uses the current tool (pen, highlighter, eraser, select); fingers scroll and
 ///   pinch-zoom (unless "Draw with finger" is on: then one finger uses the tool and two scroll).
 /// - Writing can run from one page onto the next.
-/// - Draw a shape and hold still to snap it to a clean line, circle, rectangle or polygon.
+/// - Draw a shape and hold still to snap it to a clean line, circle, rectangle or polygon. Keep the
+///   pen down to drag it: a line's end follows the pen and locks flat or upright on the way.
 /// - Pinch-zoom locks at "page width fills the screen" and "whole page fits".
 /// - Two-finger tap undoes, three-finger tap redoes; Apple Pencil double-tap does what the iPad's
 ///   Apple Pencil setting says.
@@ -130,8 +131,11 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         /// Where the pen last moved to; if it stays near here long enough, the shape snaps.
         var holdAnchor: CGPoint?
         var holdTimer: DispatchWorkItem?
-        /// Set once the stroke has snapped to a clean shape.
+        /// Set once the stroke has snapped to a clean shape: the shape now (after any dragging).
         var shape: ShapeRecognizer.Shape?
+        /// The shape as it snapped, where the pen was then, and the width it's drawn at. Moving
+        /// the pen from there reshapes it (see `ShapeAdjusting`).
+        var snapped: (shape: ShapeRecognizer.Shape, pen: CGPoint, width: Float)?
     }
 
     /// Selected strokes, text boxes and images, and the box around them in content coordinates.
@@ -450,7 +454,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     func highlighterHosts(overlapping bounds: CGRect) -> [LiveInk.HighlighterHost] {
         document.pages.compactMap { page in
             guard let view = pageViews[page.id], view.frame.intersects(bounds) else { return nil }
-            return LiveInk.HighlighterHost(layer: view.highlighterHost, frame: view.frame)
+            return LiveInk.HighlighterHost(layer: view.highlighterHost, frame: view.frame, paper: page.record.paper)
         }
     }
 
@@ -653,7 +657,8 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
                 // The highlighter's chisel tip doesn't respond to pressure.
                 curve: isHighlighter ? PressureCurve(sensitivity: 0) : settings.pressureCurve,
                 // Smoothing is set in screen points, so it feels the same at any zoom.
-                smoothing: StrokeSmoothing.screenRadius / scrollView.zoomScale
+                smoothing: CGFloat(settings.smoothing) / scrollView.zoomScale,
+                pressureSmoothing: settings.pressureSmoothing / scrollView.zoomScale
             ),
             color: presets.currentColor,
             displayColor: isHighlighter ? presets.currentColor : presets.currentColor.displayed(on: page.record.paper)
@@ -668,10 +673,19 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
 
     func add(_ samples: [StrokeGestureRecognizer.Sample], forceUpdates: [StrokeGestureRecognizer.ForceUpdate], predicted: [CGPoint]) {
         guard var active = activeStroke else { return }
-        // Once snapped to a shape, the stroke stays that shape until the pen lifts.
-        guard active.shape == nil else { return }
         let origin = active.pageView.frame.origin
         func local(_ point: CGPoint) -> CGPoint { CGPoint(x: point.x - origin.x, y: point.y - origin.y) }
+        // Once snapped, moving the pen reshapes the shape until it lifts: a line's end follows
+        // the pen, locking flat or upright on the way.
+        if let snapped = active.snapped {
+            guard let pen = samples.last.map({ local($0.location) }) else { return }
+            let shape = ShapeAdjusting.adjust(snapped.shape, from: snapped.pen, to: pen)
+            active.shape = shape
+            activeStroke = active
+            liveInk.showLiveStroke(ShapeRecognizer.points(for: shape, width: snapped.width), color: active.displayColor,
+                                   tool: active.tool, pageOrigin: origin)
+            return
+        }
 
         for sample in samples {
             if let index = active.builder.add(local(sample.location), force: sample.force), let estimation = sample.estimationIndex {
@@ -692,7 +706,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             active.holdTimer = timer
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.holdDuration, execute: timer)
         }
-        let points = active.builder.livePoints(predicted: predicted.map(local))
+        let points = active.builder.livePoints(predicted: predicted.map(local), predictionScale: CGFloat(settings.tipLead))
         activeStroke = active
         liveInk.showLiveStroke(points, color: active.displayColor, tool: active.tool, pageOrigin: origin)
     }
@@ -701,17 +715,15 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     func snapToShape() {
         guard var active = activeStroke, active.shape == nil else { return }
         let points = active.builder.finishedPoints()
-        guard let shape = ShapeRecognizer.recognize(points.map(\.location), linesOnly: active.tool == .highlighter) else { return }
-        active.shape = shape
-        activeStroke = active
-        liveInk.showLiveStroke(shapePoints(shape, from: points), color: active.displayColor, tool: active.tool,
-                               pageOrigin: active.pageView.frame.origin)
-    }
-
-    /// A snapped shape is drawn at the stroke's average width.
-    func shapePoints(_ shape: ShapeRecognizer.Shape, from points: [InkPoint]) -> [InkPoint] {
+        guard let pen = points.last?.location,
+              let shape = ShapeRecognizer.recognize(points.map(\.location), linesOnly: active.tool == .highlighter) else { return }
+        // A snapped shape is drawn at the stroke's average width.
         let width = points.map(\.width).reduce(0, +) / Float(max(points.count, 1))
-        return ShapeRecognizer.points(for: shape, width: width)
+        active.shape = shape
+        active.snapped = (shape, pen, width)
+        activeStroke = active
+        liveInk.showLiveStroke(ShapeRecognizer.points(for: shape, width: width), color: active.displayColor, tool: active.tool,
+                               pageOrigin: active.pageView.frame.origin)
     }
 
     func finishStroke() {
@@ -719,8 +731,8 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         activeStroke = nil
         active.holdTimer?.cancel()
         var points = active.builder.finishedPoints()
-        if let shape = active.shape {
-            points = shapePoints(shape, from: points)
+        if let shape = active.shape, let snapped = active.snapped {
+            points = ShapeRecognizer.points(for: shape, width: snapped.width)
         }
         guard !points.isEmpty else {
             liveInk.clearLiveStroke()
@@ -982,6 +994,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     /// - `-DebugTools`: replays a highlight, a snapped circle, then a whole-stroke erase and a lasso.
     /// - `-DebugSelectAll`: selects everything on page 1 and shows the action bar.
     /// - `-DebugPages`: adds two pages, then deletes the first.
+    /// - `-DebugShapes`: snaps two lines and drags them (one locks flat), then crosses two highlights.
     /// - `-DebugZoom 2`: zooms in first.
     func startDebugScenarioIfRequested() {
         let zoom = UserDefaults.standard.double(forKey: "DebugZoom")
@@ -1016,6 +1029,12 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             startDebugLongStroke()
             return
         }
+        if arguments.contains("-DebugShapes"), let page = document.pages.first, let pageView = pageViews[page.id] {
+            debugStrokeOrigin = CGPoint(x: pageView.frame.minX + 80, y: pageView.frame.minY + 300)
+            liveInk.rasterScale = tileRasterScale
+            CADisplayLink(target: self, selector: #selector(stepDebugShapes(_:))).add(to: .main, forMode: .common)
+            return
+        }
         guard arguments.contains("-DebugLiveStroke") || arguments.contains("-DebugTools"),
               let page = document.pages.first, let pageView = pageViews[page.id] else { return }
         if arguments.contains("-DebugLiveStroke") {
@@ -1030,12 +1049,47 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         CADisplayLink(target: self, selector: #selector(stepDebugScenario(_:))).add(to: .main, forMode: .common)
     }
 
+    /// `-DebugShapes`: two lines that snap, then get dragged: the first to 2° (it locks flat),
+    /// the second to 11° (it stays free). Then a highlight, and a second one crossing it that
+    /// stays live from 5 to 8 seconds (the crossing must not look darker).
+    @objc private func stepDebugShapes(_ link: CADisplayLink) {
+        debugStep += 1
+        let t = Double(debugStep) / 60
+        let o = debugStrokeOrigin
+        func pen(_ x: CGFloat, _ y: CGFloat) {
+            add([.init(location: CGPoint(x: o.x + x, y: o.y + y), force: 0.3, estimationIndex: nil)], forceUpdates: [], predicted: [])
+        }
+        func line(from start: Double, dy: CGFloat, dragTo end: CGFloat, tool: InkTool = .pen) {
+            switch t - start {
+            case 0..<0.02: activeStroke = debugStroke(tool: tool)
+            case 0.02..<0.5: let f = (t - start) / 0.5; pen(300 * f, dy + 25 * f)
+            // Holding still from 0.5 s snaps it; then the end is dragged.
+            case 1.1..<1.5: let f = (t - start - 1.1) / 0.4; pen(300, dy + 25 + (end - 25) * f)
+            case 1.5..<1.52: finishStroke()
+            default: break
+            }
+        }
+        line(from: 0, dy: 0, dragTo: 12)
+        line(from: 2, dy: 80, dragTo: 60)
+        switch t {
+        case 4..<4.02: activeStroke = debugStroke(tool: .highlighter)
+        case 4.02..<4.5: pen(300 * (t - 4) / 0.5, 200)
+        case 4.6..<4.62: finishStroke()
+        case 5..<5.02: activeStroke = debugStroke(tool: .highlighter)
+        case 5.02..<5.5: pen(150 + 10 * sin(t * 9), 150 + 100 * (t - 5) / 0.5)
+        case 8..<8.02: finishStroke()
+        case 8.5...: link.invalidate()
+        default: break
+        }
+    }
+
     func debugStroke(tool: InkTool) -> ActiveStroke? {
         guard let page = document.pages.first, let pageView = pageViews[page.id] else { return nil }
         let presets = tool == .highlighter ? settings.highlighter : settings.pen
         return ActiveStroke(pageID: page.id, pageView: pageView, tool: tool,
                             builder: StrokeBuilder(baseWidth: presets.currentSize, curve: settings.pressureCurve,
-                                                   smoothing: StrokeSmoothing.screenRadius / scrollView.zoomScale),
+                                                   smoothing: CGFloat(settings.smoothing) / scrollView.zoomScale,
+                                                   pressureSmoothing: settings.pressureSmoothing / scrollView.zoomScale),
                             color: tool == .pen ? .red : presets.currentColor,
                             displayColor: tool == .pen ? .red : presets.currentColor)
     }
@@ -1137,7 +1191,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             link.invalidate()
             endSelectGesture()
             if ProcessInfo.processInfo.arguments.contains("-DebugDarkPaper") {
-                document.setPaper(PaperStyle(template: .lined, color: .paperDark, lineSpacing: .wide))
+                document.setPaper(PaperStyle(template: .lined, color: .paperDark, lineSpacingMillimeters: 10))
             }
             if ProcessInfo.processInfo.arguments.contains("-DebugUndoAll") {
                 // Undo the move, the erase, the circle and the highlight, one per half second.

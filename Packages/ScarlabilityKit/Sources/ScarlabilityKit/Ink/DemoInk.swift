@@ -5,15 +5,18 @@ import Foundation
 /// does (~240 samples per second with changing pressure), so the output goes through the same
 /// smoothing and pressure curve as real writing.
 public enum DemoInk {
-    /// Position smoothing used for demo strokes: the app's default at the normal (page fits width) zoom on an 11" iPad.
-    public static let smoothing = StrokeSmoothing.screenRadius / 1.316
+    /// The normal zoom (an A4 page filling the width of an 11" iPad in portrait).
+    static let zoom: CGFloat = 820 / PageSize.a4.width
+    /// Position smoothing used for demo strokes: the app's default at the normal zoom.
+    public static let smoothing = StrokeSmoothing.screenRadius / zoom
 
     public static func strokes(color: InkColor = .black, baseWidth: Double = 2.2, curve: PressureCurve = PressureCurve()) -> [Stroke] {
         var strokes: [Stroke] = []
         let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
 
         func add(_ samples: [(CGPoint, Double)], color: InkColor = color, width: Double = baseWidth) {
-            var builder = StrokeBuilder(baseWidth: width, curve: curve, smoothing: smoothing)
+            var builder = StrokeBuilder(baseWidth: width, curve: curve, smoothing: smoothing,
+                                        pressureSmoothing: StrokeBuilder.screenPressureSmoothing / zoom)
             for (location, force) in samples {
                 builder.add(location, force: force)
             }

@@ -96,6 +96,52 @@ struct StrokeSmoothingTests {
         #expect(live.finishedPoints() == batch.finishedPoints())
     }
 
+    /// The thickness right behind the pen must not change as you keep writing (it used to,
+    /// which looked like the tip wobbling). Only the newest point can, when the next sample lands
+    /// on top of it, and the Pencil's refined force readings.
+    @Test func widthsNeverChangeBehindThePen() {
+        var builder = StrokeBuilder(baseWidth: 2.2, curve: PressureCurve(sensitivity: 1), smoothing: 0.6)
+        var previous: [InkPoint] = []
+        for (index, (location, force)) in DemoInk.shakyHandwritingSamples().enumerated() {
+            builder.add(location, force: force)
+            guard index.isMultiple(of: 3) else { continue }
+            let now = builder.livePoints()
+            #expect(zip(previous.dropLast(), now).allSatisfy { $0.width == $1.width })
+            previous = now
+        }
+    }
+
+    /// The line only moves within the smoothing window at the tip: about 1.5 points of length at
+    /// the normal zoom (it was 10 before, with widths smoothed over a long window too).
+    @Test func onlyTheVeryTipMoves() {
+        let smoothing = StrokeSmoothing.screenRadius / 1.38
+        #expect(StrokeSmoothing.settledLength(radius: smoothing) < 1.5)
+        var builder = StrokeBuilder(baseWidth: 2.2, curve: PressureCurve(), smoothing: smoothing)
+        var previous: [InkPoint] = []
+        for (location, force) in DemoInk.shakyHandwritingSamples() {
+            builder.add(location, force: force)
+            let now = builder.livePoints()
+            var length: CGFloat = 0
+            var final = previous.count
+            while final > 1, length <= StrokeSmoothing.settledLength(radius: smoothing) {
+                final -= 1
+                length += previous[final].location.distance(to: previous[final - 1].location)
+            }
+            // (Lengths here are along the smoothed line, a hair off the raw one, so skip one point.)
+            final = max(final - 1, 0)
+            #expect(Array(now.prefix(final)) == Array(previous.prefix(final)))
+            previous = now
+        }
+    }
+
+    @Test func predictionCanBeDamped() {
+        var builder = StrokeBuilder(baseWidth: 2, curve: PressureCurve(), smoothing: 1.2)
+        builder.add(CGPoint(x: 0, y: 0), force: 0.3)
+        builder.add(CGPoint(x: 10, y: 0), force: 0.3)
+        #expect(builder.livePoints(predicted: [CGPoint(x: 20, y: 0)], predictionScale: 0.5).last?.location == CGPoint(x: 15, y: 0))
+        #expect(builder.livePoints(predicted: [CGPoint(x: 20, y: 0)], predictionScale: 0).count == 2)
+    }
+
     @Test func liveAndFinishedStrokesMatch() {
         var builder = StrokeBuilder(baseWidth: 2.2, curve: PressureCurve(), smoothing: 1.2)
         for (location, force) in DemoInk.shakyHandwritingSamples() {

@@ -10,6 +10,28 @@ enum Tool: String, Codable, CaseIterable {
     case text
 }
 
+/// The pen's tip.
+enum PenStyle: String, Codable, CaseIterable {
+    /// Even lines, a little thicker when you press harder.
+    case standard
+    /// 钢笔: much thinner when light and bolder when firm.
+    case fountain
+
+    var title: String {
+        switch self {
+        case .standard: "Pen"
+        case .fountain: "Fountain Pen"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .standard: "pencil.tip"
+        case .fountain: "pencil.and.scribble"
+        }
+    }
+}
+
 enum EraserMode: String, Codable {
     /// Touching a line removes all of it.
     case wholeStroke
@@ -53,7 +75,12 @@ struct ToolPresets: Codable, Equatable {
 
     /// Black, blue, red, white, pink, orange and gray, like Notability.
     static let inkColors: [InkColor] = [.black, .blue, .red, .white, InkColor(hex: 0xE23BC8), InkColor(hex: 0xEFA33B), InkColor(hex: 0x949494)]
+    /// Fluorescent (荧光) yellow, green, blue, pink and orange.
     static let highlighterColors: [InkColor] = [
+        InkColor(hex: 0xF6FF00), InkColor(hex: 0x6BFF5A), InkColor(hex: 0x45D5FF), InkColor(hex: 0xFF5CCF), InkColor(hex: 0xFFA526),
+    ]
+    /// The highlighter colors M4.5 started with.
+    static let paleHighlighterColors: [InkColor] = [
         InkColor(hex: 0xFFE14D), InkColor(hex: 0x7DDB6B), InkColor(hex: 0x6EC6FF), InkColor(hex: 0xFF8FC7), InkColor(hex: 0xFFB054),
     ]
 
@@ -104,6 +131,19 @@ final class ToolSettings {
     var textSize: Double { didSet { save() } }
     var pressureSensitivity: Double { didSet { save() } }
     var drawsWithFinger: Bool { didSet { save() } }
+    var penStyle: PenStyle { didSet { save() } }
+    // Pen Feel (笔感), in Settings.
+    /// How much the line is smoothed (σ, in screen points).
+    var smoothing: Double { didSet { save() } }
+    /// How much pressure changes the fountain pen's width (0–1).
+    var fountainSensitivity: Double { didSet { save() } }
+    /// How far ahead of the real line the Pencil's predicted path is drawn (0–1): more follows
+    /// the tip more closely, less is steadier.
+    var tipLead: Double { didSet { save() } }
+
+    static let defaultSmoothing = Double(StrokeSmoothing.screenRadius)
+    static let smoothingRange: ClosedRange<Double> = 0...2
+    static let defaultTipLead = 0.6
 
     @ObservationIgnored private let defaults: UserDefaults
     private static let storageKey = "toolSettings"
@@ -125,7 +165,9 @@ final class ToolSettings {
         }
         // Before M4.5 the pen and text had 3 colors and the highlighter 1.
         stored.pen = stored.pen.upgradingColors(from: [.black, .blue, .red], to: ToolPresets.inkColors)
-        stored.highlighter = stored.highlighter.upgradingColors(from: [InkColor(hex: 0xFFE14D)], to: ToolPresets.highlighterColors)
+        stored.highlighter = stored.highlighter
+            .upgradingColors(from: [InkColor(hex: 0xFFE14D)], to: ToolPresets.highlighterColors)
+            .upgradingColors(from: ToolPresets.paleHighlighterColors, to: ToolPresets.highlighterColors)
         stored.text = stored.text?.upgradingColors(from: [.black, .blue, .red], to: ToolPresets.inkColors)
         tool = stored.tool
         previousTool = stored.previousTool
@@ -141,9 +183,32 @@ final class ToolSettings {
         textSize = stored.textSize ?? 17
         pressureSensitivity = stored.pressureSensitivity
         drawsWithFinger = stored.drawsWithFinger
+        penStyle = stored.penStyle ?? .standard
+        smoothing = stored.smoothing ?? Self.defaultSmoothing
+        fountainSensitivity = stored.fountainSensitivity ?? PressureCurve.defaultFountainSensitivity
+        tipLead = stored.tipLead ?? Self.defaultTipLead
     }
 
-    var pressureCurve: PressureCurve { PressureCurve(sensitivity: pressureSensitivity) }
+    var pressureCurve: PressureCurve {
+        switch penStyle {
+        case .standard: PressureCurve(sensitivity: pressureSensitivity)
+        case .fountain: .fountain(sensitivity: fountainSensitivity)
+        }
+    }
+
+    /// How quickly the pen's width follows pressure, in screen points (shorter is quicker). The
+    /// fountain pen reacts quicker.
+    var pressureSmoothing: CGFloat {
+        penStyle == .fountain ? StrokeBuilder.screenPressureSmoothing / 2 : StrokeBuilder.screenPressureSmoothing
+    }
+
+    /// Puts the Pen Feel settings back to how they started.
+    func resetPenFeel() {
+        smoothing = Self.defaultSmoothing
+        pressureSensitivity = PressureCurve.defaultSensitivity
+        fountainSensitivity = PressureCurve.defaultFountainSensitivity
+        tipLead = Self.defaultTipLead
+    }
 
     /// The style new text boxes start with.
     var textStyle: TextRun { TextRun(text: "", font: textFont, size: textSize, color: text.currentColor) }
@@ -167,6 +232,11 @@ final class ToolSettings {
         var textSize: Double?
         var pressureSensitivity: Double
         var drawsWithFinger: Bool
+        // Added with the fountain pen and Pen Feel; optional for the same reason.
+        var penStyle: PenStyle?
+        var smoothing: Double?
+        var fountainSensitivity: Double?
+        var tipLead: Double?
 
         static let defaults = Stored(
             tool: .pen,
@@ -182,7 +252,11 @@ final class ToolSettings {
             textFont: .system,
             textSize: 17,
             pressureSensitivity: PressureCurve.defaultSensitivity,
-            drawsWithFinger: false
+            drawsWithFinger: false,
+            penStyle: .standard,
+            smoothing: ToolSettings.defaultSmoothing,
+            fountainSensitivity: PressureCurve.defaultFountainSensitivity,
+            tipLead: ToolSettings.defaultTipLead
         )
 
         func validated() -> Stored? {
@@ -217,7 +291,11 @@ final class ToolSettings {
             textFont: textFont,
             textSize: textSize,
             pressureSensitivity: pressureSensitivity,
-            drawsWithFinger: drawsWithFinger
+            drawsWithFinger: drawsWithFinger,
+            penStyle: penStyle,
+            smoothing: smoothing,
+            fountainSensitivity: fountainSensitivity,
+            tipLead: tipLead
         )
         defaults.set(try? JSONEncoder().encode(stored), forKey: Self.storageKey)
     }
