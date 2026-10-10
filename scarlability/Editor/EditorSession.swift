@@ -24,7 +24,13 @@ final class EditorSession {
         case size(Double)
         case color(InkColor)
         case insertImage(ImageSource)
+        case goToPage(UUID)
+        /// To the previous (-1) or next (+1) page.
+        case scrollPage(Int)
     }
+
+    /// The page in the middle of the screen, set by the canvas.
+    var visiblePageID: UUID?
 
     /// A text box is being typed in.
     var isEditingText = false

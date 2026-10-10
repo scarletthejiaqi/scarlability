@@ -51,10 +51,27 @@ struct ToolPresets: Codable, Equatable {
             && sizes.count == ToolSettings.sizeCount && sizes.indices.contains(selectedSizeSlot)
     }
 
-    static let pen = ToolPresets(colors: [.black, .blue, .red], selectedColorSlot: 0, sizes: [1.4, 2.2, 3.4], selectedSizeSlot: 1)
-    static let highlighter = ToolPresets(colors: [InkColor(hex: 0xFFE14D)], selectedColorSlot: 0, sizes: [10, 16, 24], selectedSizeSlot: 1)
+    /// Black, blue, red, white, pink, orange and gray, like Notability.
+    static let inkColors: [InkColor] = [.black, .blue, .red, .white, InkColor(hex: 0xE23BC8), InkColor(hex: 0xEFA33B), InkColor(hex: 0x949494)]
+    static let highlighterColors: [InkColor] = [
+        InkColor(hex: 0xFFE14D), InkColor(hex: 0x7DDB6B), InkColor(hex: 0x6EC6FF), InkColor(hex: 0xFF8FC7), InkColor(hex: 0xFFB054),
+    ]
+
+    static let pen = ToolPresets(colors: inkColors, selectedColorSlot: 0, sizes: [1.4, 2.2, 3.4], selectedSizeSlot: 1)
+    static let highlighter = ToolPresets(colors: highlighterColors, selectedColorSlot: 0, sizes: [10, 16, 24], selectedSizeSlot: 1)
     /// Text colors; the sizes aren't used (text has its own size setting).
-    static let text = ToolPresets(colors: [.black, .blue, .red], selectedColorSlot: 0, sizes: [14, 17, 22], selectedSizeSlot: 1)
+    static let text = ToolPresets(colors: inkColors, selectedColorSlot: 0, sizes: [14, 17, 22], selectedSizeSlot: 1)
+
+    /// Swaps in the longer color row if these are still the colors an older version started with.
+    func upgradingColors(from old: [InkColor], to new: [InkColor]) -> ToolPresets {
+        guard colors == old else { return self }
+        var presets = self
+        presets.colors = new
+        if selectedColorSlot == old.count {
+            presets.selectedColorSlot = new.count
+        }
+        return presets
+    }
 }
 
 /// Which tool is active and each tool's settings, saved on this device.
@@ -106,6 +123,10 @@ final class ToolSettings {
             stored.drawsWithFinger = pen.drawsWithFinger
             if !stored.pen.isValid { stored.pen = .pen }
         }
+        // Before M4.5 the pen and text had 3 colors and the highlighter 1.
+        stored.pen = stored.pen.upgradingColors(from: [.black, .blue, .red], to: ToolPresets.inkColors)
+        stored.highlighter = stored.highlighter.upgradingColors(from: [InkColor(hex: 0xFFE14D)], to: ToolPresets.highlighterColors)
+        stored.text = stored.text?.upgradingColors(from: [.black, .blue, .red], to: ToolPresets.inkColors)
         tool = stored.tool
         previousTool = stored.previousTool
         pen = stored.pen

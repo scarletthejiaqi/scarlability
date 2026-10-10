@@ -114,6 +114,38 @@ struct LibraryTests {
         #expect(library.dividers[0].subjects.first?.notes.map(\.record.title) == ["Cells"])
     }
 
+    @Test func favoritesAndDividerColorsAreSaved() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let divider = try folder.createDivider(named: "Completed course")
+        try folder.setColor(InkColor.subjectColors[1], ofDivider: divider)
+        let note = try folder.createNote(title: "HW1", inSubject: nil)
+        try folder.setFavorite(true, noteAt: note.url)
+
+        var library = try folder.loadLibrary()
+        #expect(library.dividers[0].color == InkColor.subjectColors[1])
+        #expect(library.unfiled[0].record.isFavorite)
+        // A copy starts out not a favorite.
+        _ = try folder.duplicateNote(at: note.url)
+        library = try folder.loadLibrary()
+        #expect(library.unfiled.filter(\.record.isFavorite).map(\.record.title) == ["HW1"])
+
+        try folder.setFavorite(false, noteAt: note.url)
+        #expect(try folder.loadLibrary().unfiled.allSatisfy { !$0.record.isFavorite })
+    }
+
+    @Test func deletedPagesAreLeftOut() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try folder.createNote(title: "Pages", inSubject: nil)
+        var first = PageRecord(sortKey: 1, size: PageSize.a4, paper: .whiteLined)
+        let second = PageRecord(sortKey: 2, size: PageSize.a4, paper: .whiteLined)
+        try folder.save(first, inNoteAt: note.url)
+        try folder.save(second, inNoteAt: note.url)
+        #expect(try folder.loadPages(inNoteAt: note.url).count == 2)
+        first.deletedAt = Date()
+        try folder.save(first, inNoteAt: note.url)
+        #expect(try folder.loadPages(inNoteAt: note.url).map(\.record.id) == [second.id])
+    }
+
     @Test func thumbnailHasThePageShape() throws {
         let content = PageContent(paper: .whiteLined, size: PageSize.a4, strokes: DemoInk.strokes().map(RenderedStroke.init))
         let image = try #require(Thumbnail.render(content, width: 150, scale: 2))

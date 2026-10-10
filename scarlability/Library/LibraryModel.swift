@@ -4,14 +4,33 @@ import Observation
 import ScarlabilityKit
 import os
 
-/// The library: Dividers, Subjects and notes, as folders in the notes folder (see `LibraryLayout`).
+/// The library: folders (Subjects), folders that hold folders (Dividers) and notes, as folders
+/// in the notes folder (see `LibraryLayout`).
 @Observable
 final class LibraryModel {
     enum Section: Hashable {
         case allNotes
+        case recents
+        case favorites
         case unfiled
         case subject(String)
         case recentlyDeleted
+
+        /// The tabs under "Notes".
+        static let noteTabs: [Section] = [.allNotes, .recents, .favorites, .unfiled]
+
+        var isNoteTab: Bool { Self.noteTabs.contains(self) }
+
+        var tabTitle: String {
+            switch self {
+            case .allNotes: "All Notes"
+            case .recents: "Recents"
+            case .favorites: "Favorites"
+            case .unfiled: "Unfiled"
+            case .subject: "Folder"
+            case .recentlyDeleted: "Recently Deleted"
+            }
+        }
     }
 
     enum Sort: String, CaseIterable {
@@ -39,6 +58,10 @@ final class LibraryModel {
     var collapsedDividers: Set<String> {
         didSet { UserDefaults.standard.set(Array(collapsedDividers), forKey: Self.collapsedKey) }
     }
+    /// When each note was last opened on this device, for Recents.
+    private var openedAt: [UUID: Date] {
+        didSet { UserDefaults.standard.set(openedAt.reduce(into: [String: Date]()) { $0[$1.key.uuidString] = $1.value }, forKey: Self.openedKey) }
+    }
     /// Set when a library action fails, to show the user.
     var errorMessage: String?
     private(set) var thumbnails: [UUID: Thumb] = [:]
@@ -53,28 +76,46 @@ final class LibraryModel {
     nonisolated private static let logger = Logger(subsystem: "scarlability", category: "Library")
     private static let sortKey = "librarySort"
     private static let collapsedKey = "collapsedDividers"
+    private static let openedKey = "notesOpenedAt"
+    /// Recents shows notes opened or changed within this long.
+    private static let recentsWindow: TimeInterval = 30 * 24 * 60 * 60
     nonisolated static let thumbnailWidth: CGFloat = 200
 
     init(folder: NotebookFolder) {
         self.folder = folder
         sort = UserDefaults.standard.string(forKey: Self.sortKey).flatMap(Sort.init(rawValue:)) ?? .modified
         collapsedDividers = Set(UserDefaults.standard.stringArray(forKey: Self.collapsedKey) ?? [])
+        let opened = UserDefaults.standard.dictionary(forKey: Self.openedKey) as? [String: Date] ?? [:]
+        openedAt = opened.reduce(into: [:]) { result, entry in
+            if let id = UUID(uuidString: entry.key) { result[id] = entry.value }
+        }
     }
 
     // MARK: - What's shown
 
-    /// The notes in the selected section, filtered by the search and sorted.
+    var isSearching: Bool { !searchText.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    /// The notes in the selected section, sorted. While searching, every note whose title matches.
     var notes: [NotebookFolder.StoredNote] {
         var notes: [NotebookFolder.StoredNote]
-        switch section {
-        case .allNotes: notes = snapshot.allNotes
-        case .unfiled: notes = snapshot.unfiled
-        case .subject(let id): notes = snapshot.subject(id: id)?.notes ?? []
-        case .recentlyDeleted: notes = snapshot.recentlyDeleted
-        }
-        let query = searchText.trimmingCharacters(in: .whitespaces)
-        if !query.isEmpty {
-            notes = notes.filter { $0.record.title.localizedCaseInsensitiveContains(query) }
+        if isSearching {
+            let query = searchText.trimmingCharacters(in: .whitespaces)
+            notes = snapshot.allNotes.filter { $0.record.title.localizedCaseInsensitiveContains(query) }
+        } else {
+            switch section {
+            case .allNotes: notes = snapshot.allNotes
+            case .recents:
+                let cutoff = Date().addingTimeInterval(-Self.recentsWindow)
+                return snapshot.allNotes
+                    .map { ($0, max(openedAt[$0.record.id] ?? .distantPast, $0.record.modifiedAt)) }
+                    .filter { $0.1 > cutoff }
+                    .sorted { $0.1 > $1.1 }
+                    .map(\.0)
+            case .favorites: notes = snapshot.allNotes.filter(\.record.isFavorite)
+            case .unfiled: notes = snapshot.unfiled
+            case .subject(let id): notes = snapshot.subject(id: id)?.notes ?? []
+            case .recentlyDeleted: notes = snapshot.recentlyDeleted
+            }
         }
         switch sort {
         case .modified: notes.sort { $0.record.modifiedAt > $1.record.modifiedAt }
@@ -88,12 +129,20 @@ final class LibraryModel {
     }
 
     var title: String {
+        if isSearching { return "Search" }
         switch section {
-        case .allNotes: "All Notes"
-        case .unfiled: "Unfiled"
-        case .subject(let id): snapshot.subject(id: id)?.name ?? "Subject"
-        case .recentlyDeleted: "Recently Deleted"
+        case .subject(let id): return snapshot.subject(id: id)?.name ?? "Folder"
+        case .recentlyDeleted: return "Recently Deleted"
+        default: return "All Notes"
         }
+    }
+
+    /// Remembers that a note was opened, for Recents.
+    func noteOpened(_ note: NotebookFolder.StoredNote) {
+        openedAt[note.record.id] = Date()
+        // Forget notes not opened in a long time, so the list doesn't grow forever.
+        let cutoff = Date().addingTimeInterval(-Self.recentsWindow)
+        openedAt = openedAt.filter { $0.value > cutoff }
     }
 
     /// The subject new notes go into from this section (nil means Unfiled).
@@ -188,8 +237,19 @@ final class LibraryModel {
         }
     }
 
-    func createDivider(named name: String) async {
-        await perform("create the divider") { try $0.createDivider(named: name) }
+    func createDivider(named name: String, color: InkColor) async {
+        await perform("create the folder") { try $0.createDivider(named: name, color: color) }
+    }
+
+    func setColor(_ color: InkColor, ofDivider id: String) async {
+        await perform("change the color") { try $0.setColor(color, ofDivider: id) }
+    }
+
+    func setFavorite(_ isFavorite: Bool, _ notes: [NotebookFolder.StoredNote]) async {
+        let urls = notes.map(\.url)
+        await perform(isFavorite ? "add to Favorites" : "remove from Favorites") { folder in
+            for url in urls { try folder.setFavorite(isFavorite, noteAt: url) }
+        }
     }
 
     func renameFolder(_ id: String, to name: String) async {
@@ -279,19 +339,27 @@ final class LibraryModel {
     }
 
     #if DEBUG
-    /// Launch with `-SeedLibrary` (and an empty library) to get demo dividers, subjects and notes.
+    /// Launch with `-SeedLibrary` (and an empty library) to get demo folders, a folder group and notes.
     func seedDemoLibraryIfEmpty() async {
         guard snapshot.allNotes.isEmpty, snapshot.allSubjects.isEmpty else { return }
         await perform("seed") { folder in
-            let spring = try folder.createDivider(named: "Spring 2026")
-            let biology = try folder.createSubject(named: "Biology", color: InkColor.subjectColors[3], inDivider: spring)
-            let chemistry = try folder.createSubject(named: "Chemistry", color: InkColor.subjectColors[5], inDivider: spring)
-            let ideas = try folder.createSubject(named: "Ideas", color: InkColor.subjectColors[6])
-            for (title, subject) in [("Cells", biology), ("Genetics", biology), ("Lab 1", chemistry), ("Sketches", ideas), ("Groceries", nil as String?)] {
+            let colors = InkColor.subjectColors
+            let finance = try folder.createSubject(named: "FINM 330", color: colors[2])
+            let math = try folder.createSubject(named: "Math 185", color: colors[0])
+            let completed = try folder.createDivider(named: "Completed course")
+            let analysis = try folder.createSubject(named: "Math 211", color: colors[1], inDivider: completed)
+            _ = try folder.createSubject(named: "STAT 24500", color: colors[3], inDivider: completed)
+            _ = try folder.createSubject(named: "ECON 20100", color: colors[6], inDivider: completed)
+            let notes: [(String, String?)] = [("FINM 330 HW1", finance), ("MATH 185 HW1", math), ("Lecture 3", math),
+                                              ("Proofs", analysis), ("Groceries", nil)]
+            for (title, subject) in notes {
                 let note = try folder.createNote(title: title, inSubject: subject)
                 let page = PageRecord(sortKey: 1, size: PageSize.a4, paper: .whiteLined)
                 try folder.save(page, inNoteAt: note.url)
                 try folder.saveOwnInk(DeviceInk(strokes: DemoInk.strokes()), page: page.id, inNoteAt: note.url)
+                if title == "FINM 330 HW1" {
+                    try folder.setFavorite(true, noteAt: note.url)
+                }
             }
         }
     }

@@ -3,158 +3,246 @@ import ScarlabilityKit
 import SwiftUI
 import UIKit
 
-/// Notability-style top toolbar: title row, tools row, then the current tool's options.
+/// Notability-style floating toolbar: the back button on the left, the tool palette in the
+/// middle (tools on top, the current tool's colors and sizes below), and undo, redo, the note
+/// menu and the page panel button on the right.
 struct EditorToolbar: View {
     let document: NoteDocument
     @Bindable var settings: ToolSettings
     let session: EditorSession
+    @Binding var showsPages: Bool
+    /// Where the palette ends, from the top of the screen.
+    @Binding var bottom: CGFloat
     @Environment(AppModel.self) private var model
 
-    @State private var swatchFrames: [Int: CGRect] = [:]
-    @State private var editingSizeSlot: Int?
+    @State private var leftWidth: CGFloat = 0
+    @State private var rightWidth: CGFloat = 0
+
+    var body: some View {
+        let side = max(leftWidth, rightWidth)
+        ViewThatFits(in: .horizontal) {
+            // Centered on screen when there's room…
+            HStack(alignment: .top, spacing: 0) {
+                leading.frame(width: side, alignment: .leading)
+                Spacer(minLength: 12)
+                palette.fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 12)
+                trailing.frame(width: side, alignment: .trailing)
+            }
+            // …otherwise between the buttons, the options row scrolling if it has to.
+            HStack(alignment: .top, spacing: 12) {
+                leading
+                Spacer(minLength: 0)
+                palette
+                Spacer(minLength: 0)
+                trailing
+            }
+        }
+        .padding(.horizontal, 12)
+    }
+
+    private var leading: some View {
+        HStack(spacing: 10) {
+            Button {
+                model.closeDocument()
+            } label: {
+                Image(systemName: "arrow.left")
+                    .font(.system(size: 20, weight: .medium))
+                    .frame(width: 48, height: 48)
+            }
+            .buttonStyle(.plain)
+            .floatingCard(cornerRadius: 14)
+            .accessibilityLabel("Library")
+            if document.saveFailed {
+                Image(systemName: "exclamationmark.icloud")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.red)
+                    .frame(width: 48, height: 48)
+                    .floatingCard(cornerRadius: 14)
+                    .accessibilityLabel("Not saved")
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { leftWidth = $0 }
+    }
+
+    private var trailing: some View {
+        NoteActions(document: document, settings: settings, showsPages: $showsPages)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rightWidth = $0 }
+    }
+
+    private var palette: some View {
+        ToolPalette(settings: settings, session: session)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { bottom = $0 }
+    }
+}
+
+extension View {
+    /// A white card with a soft shadow, floating over the page.
+    func floatingCard(cornerRadius: CGFloat = 16) -> some View {
+        background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .shadow(color: .black.opacity(0.10), radius: 10, y: 2)
+    }
+}
+
+// MARK: - Right side
+
+/// Undo, redo, the note's menu (rename, paper, settings) and the page panel button.
+private struct NoteActions: View {
+    let document: NoteDocument
+    @Bindable var settings: ToolSettings
+    @Binding var showsPages: Bool
+    @Environment(AppModel.self) private var model
+
     @State private var showsSettings = false
     @State private var showsPaper = false
     @State private var renaming = false
     @State private var renameText = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            titleRow
-            HStack(spacing: 8) {
-                ToolButton(title: "Pen", systemImage: "pencil.tip", tool: .pen, settings: settings)
-                ToolButton(title: "Highlighter", systemImage: "highlighter", tool: .highlighter, settings: settings)
-                ToolButton(title: "Eraser", systemImage: "eraser", tool: .eraser, settings: settings)
-                ToolButton(title: "Select", systemImage: "lasso", tool: .select, settings: settings)
-                ToolButton(title: "Text", systemImage: "textformat", tool: .text, settings: settings)
-                imageMenu
-            }
-            HStack(spacing: 14) {
-                toolOptions
-                Spacer()
-                Button(action: document.undo) {
-                    Image(systemName: "arrow.uturn.backward")
-                }
+        HStack(spacing: 4) {
+            iconButton("arrow.uturn.backward", label: "Undo", action: document.undo)
                 .disabled(!document.canUndo)
-                .accessibilityLabel("Undo")
-                Button(action: document.redo) {
-                    Image(systemName: "arrow.uturn.forward")
-                }
+            iconButton("arrow.uturn.forward", label: "Redo", action: document.redo)
                 .disabled(!document.canRedo)
-                .accessibilityLabel("Redo")
-            }
-            .font(.title3)
-            .frame(height: 34)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(.bar)
-    }
-
-    private var titleRow: some View {
-        ZStack {
-            // Tap the title to rename the note.
-            Button {
-                renameText = document.note.title
-                renaming = true
+            Menu {
+                Button("Rename Note", systemImage: "pencil") {
+                    renameText = document.note.title
+                    renaming = true
+                }
+                Button("Paper", systemImage: "doc.richtext") { showsPaper = true }
+                Button("Settings", systemImage: "gearshape") { showsSettings = true }
             } label: {
-                Text(document.note.title)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .frame(maxWidth: 420)
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 21))
+                    .frame(width: 44, height: 44)
             }
-            .buttonStyle(.plain)
-            .accessibilityHint("Rename the note")
-            .alert("Rename Note", isPresented: $renaming) {
-                TextField("Title", text: $renameText)
-                Button("Rename") { document.rename(to: renameText) }
-                Button("Cancel", role: .cancel) {}
+            .accessibilityLabel("More")
+            .popover(isPresented: $showsPaper) {
+                PaperSettingsView(document: document)
             }
-            HStack(spacing: 16) {
-                Button {
-                    model.closeDocument()
-                } label: {
-                    Label("Library", systemImage: "chevron.left")
-                        .font(.body.weight(.medium))
-                }
-                Spacer()
-                if document.saveFailed {
-                    Label("Not saved", systemImage: "exclamationmark.icloud")
-                        .font(.subheadline)
-                        .foregroundStyle(.red)
-                }
-                Button {
-                    showsPaper = true
-                } label: {
-                    Image(systemName: "doc.richtext")
-                        .font(.title3)
-                }
-                .accessibilityLabel("Paper")
-                .popover(isPresented: $showsPaper) {
-                    PaperSettingsView(document: document)
-                }
-                Button {
-                    showsSettings = true
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.title3)
-                }
-                .accessibilityLabel("Settings")
-                .popover(isPresented: $showsSettings) {
-                    EditorSettingsView(settings: settings, folderName: model.folderName) {
-                        showsSettings = false
-                        model.forgetFolder()
-                    }
+            .popover(isPresented: $showsSettings) {
+                EditorSettingsView(settings: settings, folderName: model.folderName) {
+                    showsSettings = false
+                    model.forgetFolder()
                 }
             }
+            iconButton("rectangle.portrait.on.rectangle.portrait", label: "Pages", isOn: showsPages) {
+                withAnimation(.snappy(duration: 0.25)) { showsPages.toggle() }
+            }
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 6)
+        .frame(height: 52)
+        .floatingCard(cornerRadius: 14)
+        .alert("Rename Note", isPresented: $renaming) {
+            TextField("Title", text: $renameText)
+            Button("Rename") { document.rename(to: renameText) }
+            Button("Cancel", role: .cancel) {}
         }
     }
 
-    @ViewBuilder
-    private var toolOptions: some View {
-        switch settings.tool {
-        case .pen:
-            presetOptions(\.pen, sizeRange: ToolSettings.penSizeRange)
-        case .highlighter:
-            presetOptions(\.highlighter, sizeRange: ToolSettings.highlighterSizeRange)
-        case .text:
-            textOptions
-        case .eraser:
-            Picker("Eraser", selection: $settings.eraserMode) {
-                Text("Whole Stroke").tag(EraserMode.wholeStroke)
-                Text("Partial").tag(EraserMode.partial)
-            }
-            .pickerStyle(.segmented)
-            .fixedSize()
-            Divider().frame(height: 26)
-            ForEach(0..<ToolSettings.sizeCount, id: \.self) { slot in
-                SizeDot(fraction: fraction(settings.eraserSizes[slot], in: ToolSettings.eraserSizeRange),
-                        isSelected: settings.selectedEraserSize == slot, outlined: true)
-                    .onTapGesture {
-                        if settings.selectedEraserSize == slot { editingSizeSlot = slot } else { settings.selectedEraserSize = slot }
-                    }
-                    .popover(isPresented: sizePopoverBinding(slot)) {
-                        SizeSliderView(size: $settings.eraserSizes[slot], range: ToolSettings.eraserSizeRange, preview: .eraser)
-                    }
-            }
-            Divider().frame(height: 26)
-            Toggle("Highlighter only", isOn: $settings.erasesHighlighterOnly)
-                .toggleStyle(.button)
-                .font(.subheadline)
-        case .select:
-            Picker("Select", selection: $settings.selectMode) {
-                Label("Freeform", systemImage: "lasso").tag(SelectMode.freeform)
-                Label("Box", systemImage: "rectangle.dashed").tag(SelectMode.box)
-            }
-            .pickerStyle(.segmented)
-            .fixedSize()
-            Text(settings.selectMode == .freeform ? "Draw around ink to select it" : "Drag a box around ink to select it")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+    private func iconButton(_ systemImage: String, label: String, isOn: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 19, weight: .regular))
+                .frame(width: 44, height: 40)
+                .background(isOn ? Color(.systemGray5) : .clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
+}
 
-    private var imageMenu: some View {
+// MARK: - Tool palette
+
+/// The tools on top, and the current tool's options below.
+private struct ToolPalette: View {
+    @Bindable var settings: ToolSettings
+    let session: EditorSession
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 2) {
+                ToolButton(tool: .pen, systemImage: "pencil.tip", title: "Pen", color: settings.pen.currentColor, settings: settings)
+                ToolButton(tool: .highlighter, systemImage: "highlighter", title: "Highlighter",
+                           color: settings.highlighter.currentColor, settings: settings)
+                ToolButton(tool: .eraser, systemImage: "eraser", title: "Eraser", settings: settings)
+                ToolButton(tool: .text, systemImage: "textformat", title: "Text", settings: settings)
+                ToolButton(tool: .select, systemImage: "lasso", title: "Lasso", settings: settings)
+                InsertMenu(session: session)
+                Rectangle().fill(Color(.separator)).frame(width: 1, height: 26).padding(.horizontal, 6)
+                Button {
+                    settings.drawsWithFinger.toggle()
+                } label: {
+                    Image(systemName: "hand.draw")
+                        .font(.system(size: 21))
+                        .frame(width: 44, height: 42)
+                        .background(settings.drawsWithFinger ? Color.accentColor.opacity(0.16) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .foregroundStyle(settings.drawsWithFinger ? Color.accentColor : .primary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Draw with finger")
+                .accessibilityAddTraits(settings.drawsWithFinger ? .isSelected : [])
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            // Scrolls sideways when the options don't fit (text, in portrait).
+            ViewThatFits(in: .horizontal) {
+                ToolOptions(settings: settings, session: session)
+                    .padding(.horizontal, 14)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    ToolOptions(settings: settings, session: session)
+                        .padding(.horizontal, 14)
+                }
+            }
+            .frame(height: 50)
+            .overlay(alignment: .top) {
+                Rectangle().fill(Color(.separator)).frame(height: 0.5)
+            }
+        }
+        .floatingCard(cornerRadius: 16)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct ToolButton: View {
+    let tool: Tool
+    let systemImage: String
+    let title: String
+    /// Shown as a bar under the icon (the pen's and highlighter's current color).
+    var color: InkColor?
+    @Bindable var settings: ToolSettings
+
+    var body: some View {
+        let isSelected = settings.tool == tool
+        Button {
+            settings.tool = tool
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 21, weight: isSelected ? .semibold : .regular))
+                Capsule()
+                    .fill(color.map { Color(cgColor: $0.cgColor) } ?? .clear)
+                    .frame(width: 18, height: 3)
+                    .opacity(isSelected ? 1 : 0)
+            }
+            .frame(width: 44, height: 42)
+            .background(isSelected ? Color(.systemGray5) : .clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .foregroundStyle(.primary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// The + button: photos, camera, scanner, files, paste.
+private struct InsertMenu: View {
+    let session: EditorSession
+
+    var body: some View {
         Menu {
             Button("Photos", systemImage: "photo.on.rectangle") { session.send(.insertImage(.photos)) }
             Button("Take Photo", systemImage: "camera") { session.send(.insertImage(.camera)) }
@@ -162,13 +250,77 @@ struct EditorToolbar: View {
             Button("Files", systemImage: "folder") { session.send(.insertImage(.files)) }
             Button("Paste", systemImage: "doc.on.clipboard") { session.send(.insertImage(.paste)) }
         } label: {
-            Label("Image", systemImage: "photo")
-                .font(.subheadline.weight(.medium))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .foregroundStyle(.primary)
+            Image(systemName: "plus.circle")
+                .font(.system(size: 21))
+                .frame(width: 44, height: 42)
         }
-        .accessibilityLabel("Insert image")
+        .tint(.primary)
+        .accessibilityLabel("Insert")
+    }
+}
+
+// MARK: - Tool options
+
+/// The second row: colors and sizes for the pen and highlighter, eraser and lasso modes, and
+/// text styles.
+private struct ToolOptions: View {
+    @Bindable var settings: ToolSettings
+    let session: EditorSession
+
+    @State private var swatchFrames: [Int: CGRect] = [:]
+    @State private var editingSizeSlot: Int?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            switch settings.tool {
+            case .pen:
+                presetOptions(\.pen, sizeRange: ToolSettings.penSizeRange)
+            case .highlighter:
+                presetOptions(\.highlighter, sizeRange: ToolSettings.highlighterSizeRange)
+            case .text:
+                textOptions
+            case .eraser:
+                eraserOptions
+            case .select:
+                Picker("Lasso", selection: $settings.selectMode) {
+                    Label("Freeform", systemImage: "lasso").tag(SelectMode.freeform)
+                    Label("Box", systemImage: "rectangle.dashed").tag(SelectMode.box)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                Text(settings.selectMode == .freeform ? "Draw around ink to select it" : "Drag a box around ink to select it")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+            }
+        }
+        .frame(height: 50)
+    }
+
+    @ViewBuilder
+    private var eraserOptions: some View {
+        Picker("Eraser", selection: $settings.eraserMode) {
+            Text("Whole Stroke").tag(EraserMode.wholeStroke)
+            Text("Partial").tag(EraserMode.partial)
+        }
+        .pickerStyle(.segmented)
+        .fixedSize()
+        separator
+        ForEach(0..<ToolSettings.sizeCount, id: \.self) { slot in
+            SizeDot(fraction: fraction(settings.eraserSizes[slot], in: ToolSettings.eraserSizeRange),
+                    isSelected: settings.selectedEraserSize == slot, outlined: true)
+                .onTapGesture {
+                    if settings.selectedEraserSize == slot { editingSizeSlot = slot } else { settings.selectedEraserSize = slot }
+                }
+                .popover(isPresented: sizePopoverBinding(slot)) {
+                    SizeSliderView(size: $settings.eraserSizes[slot], range: ToolSettings.eraserSizeRange, preview: .eraser)
+                }
+        }
+        separator
+        Toggle("Highlighter only", isOn: $settings.erasesHighlighterOnly)
+            .toggleStyle(.button)
+            .font(.subheadline)
+            .fixedSize()
     }
 
     /// Font, size, colors, bold/italic/underline and lists. Changes apply to what's selected
@@ -186,8 +338,9 @@ struct EditorToolbar: View {
                 }
             }
         } label: {
-            Text(style.font.displayName).font(.subheadline.weight(.medium)).frame(minWidth: 90)
+            Text(style.font.displayName).font(.subheadline.weight(.medium)).frame(minWidth: 80)
         }
+        .fixedSize()
         Menu {
             ForEach(ToolSettings.textSizes, id: \.self) { size in
                 Button {
@@ -200,9 +353,10 @@ struct EditorToolbar: View {
         } label: {
             Text("\(Int(style.size)) pt").font(.subheadline.monospacedDigit()).frame(minWidth: 44)
         }
-        Divider().frame(height: 26)
+        .fixedSize()
+        separator
         presetOptions(\.text, sizeRange: nil) { color in session.send(.color(color)) }
-        Divider().frame(height: 26)
+        separator
         Group {
             StyleButton(systemImage: "bold", isOn: style.bold) { session.send(.bold) }
             StyleButton(systemImage: "italic", isOn: style.italic) { session.send(.italic) }
@@ -213,22 +367,28 @@ struct EditorToolbar: View {
         .disabled(!session.isEditingText)
     }
 
+    private var separator: some View {
+        Rectangle().fill(Color(.separator)).frame(width: 1, height: 26)
+    }
+
     /// Color presets and the extra color slot, then (with `sizeRange`) size presets, for the
     /// pen, highlighter or text. `onColor` hears about colors picked.
     @ViewBuilder
     private func presetOptions(_ tool: ReferenceWritableKeyPath<ToolSettings, ToolPresets>, sizeRange: ClosedRange<Double>?,
                                onColor: ((InkColor) -> Void)? = nil) -> some View {
         let presets = settings[keyPath: tool]
-        ForEach(presets.colors.indices, id: \.self) { slot in
-            ColorSwatch(color: presets.colors[slot], isSelected: presets.selectedColorSlot == slot)
-                .onTapGesture { tapColor(slot, of: tool, onColor: onColor) }
-                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { swatchFrames[slot] = $0 }
+        HStack(spacing: 6) {
+            ForEach(presets.colors.indices, id: \.self) { slot in
+                ColorSwatch(color: presets.colors[slot], isSelected: presets.selectedColorSlot == slot)
+                    .onTapGesture { tapColor(slot, of: tool, onColor: onColor) }
+                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { swatchFrames[slot] = $0 }
+            }
+            ExtraColorSwatch(color: presets.extraColor, isSelected: presets.selectedColorSlot == presets.extraColorSlot)
+                .onTapGesture { tapColor(presets.extraColorSlot, of: tool, onColor: onColor) }
+                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { swatchFrames[presets.extraColorSlot] = $0 }
         }
-        ExtraColorSwatch(color: presets.extraColor, isSelected: presets.selectedColorSlot == presets.extraColorSlot)
-            .onTapGesture { tapColor(presets.extraColorSlot, of: tool, onColor: onColor) }
-            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { swatchFrames[presets.extraColorSlot] = $0 }
-
         if let sizeRange {
+            separator
             sizeOptions(tool, sizeRange: sizeRange)
         }
     }
@@ -236,21 +396,21 @@ struct EditorToolbar: View {
     @ViewBuilder
     private func sizeOptions(_ tool: ReferenceWritableKeyPath<ToolSettings, ToolPresets>, sizeRange: ClosedRange<Double>) -> some View {
         let presets = settings[keyPath: tool]
-        Divider().frame(height: 26)
-
-        ForEach(0..<ToolSettings.sizeCount, id: \.self) { slot in
-            SizeDot(fraction: fraction(presets.sizes[slot], in: sizeRange), isSelected: presets.selectedSizeSlot == slot, outlined: false)
-                .onTapGesture {
-                    if settings[keyPath: tool].selectedSizeSlot == slot {
-                        editingSizeSlot = slot
-                    } else {
-                        settings[keyPath: tool].selectedSizeSlot = slot
+        HStack(spacing: 4) {
+            ForEach(0..<ToolSettings.sizeCount, id: \.self) { slot in
+                SizeDot(fraction: fraction(presets.sizes[slot], in: sizeRange), isSelected: presets.selectedSizeSlot == slot, outlined: false)
+                    .onTapGesture {
+                        if settings[keyPath: tool].selectedSizeSlot == slot {
+                            editingSizeSlot = slot
+                        } else {
+                            settings[keyPath: tool].selectedSizeSlot = slot
+                        }
                     }
-                }
-                .popover(isPresented: sizePopoverBinding(slot)) {
-                    SizeSliderView(size: $settings[dynamicMember: tool].sizes[slot], range: sizeRange,
-                                   preview: tool == \.highlighter ? .highlighter(presets.currentColor) : .pen(presets.currentColor))
-                }
+                    .popover(isPresented: sizePopoverBinding(slot)) {
+                        SizeSliderView(size: $settings[dynamicMember: tool].sizes[slot], range: sizeRange,
+                                       preview: tool == \.highlighter ? .highlighter(presets.currentColor) : .pen(presets.currentColor))
+                    }
+            }
         }
     }
 
@@ -296,32 +456,9 @@ private struct StyleButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .frame(width: 30, height: 30)
-                .background(isOn ? Color.accentColor.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                .frame(width: 32, height: 32)
+                .background(isOn ? Color.accentColor.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 7))
         }
-    }
-}
-
-private struct ToolButton: View {
-    let title: String
-    let systemImage: String
-    let tool: Tool
-    @Bindable var settings: ToolSettings
-
-    var body: some View {
-        let isSelected = settings.tool == tool
-        Button {
-            settings.tool = tool
-        } label: {
-            Label(title, systemImage: systemImage)
-                .font(.subheadline.weight(.medium))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(isSelected ? Color.accentColor.opacity(0.15) : .clear, in: Capsule())
-                .foregroundStyle(isSelected ? Color.accentColor : .primary)
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -333,9 +470,8 @@ private struct ColorSwatch: View {
         Circle()
             .fill(Color(cgColor: color.cgColor))
             .frame(width: 26, height: 26)
-            .overlay {
-                Circle().strokeBorder(.white, lineWidth: 2).opacity(isSelected ? 1 : 0)
-            }
+            // Light colors (white) need an edge to show on the white toolbar.
+            .overlay { Circle().strokeBorder(Color(.systemGray3), lineWidth: 1).opacity(color.isLight ? 1 : 0) }
             .padding(3)
             .overlay {
                 Circle().strokeBorder(Color.accentColor, lineWidth: 2).opacity(isSelected ? 1 : 0)
@@ -345,24 +481,24 @@ private struct ColorSwatch: View {
     }
 }
 
-/// The color slot after the presets: shows a rainbow "+" until a color is picked, then that color.
+private extension InkColor {
+    /// Close to white, so it needs an outline to show on the white toolbar.
+    var isLight: Bool { Int(red) + Int(green) + Int(blue) > 690 }
+}
+
+/// The color slot after the presets: a gray "+" until a color is picked, then that color.
 private struct ExtraColorSwatch: View {
     let color: InkColor?
     let isSelected: Bool
 
-    private static let rainbow = AngularGradient(
-        colors: [.red, .orange, .yellow, .green, .blue, .purple, .red],
-        center: .center
-    )
-
     var body: some View {
         ZStack {
             if let color {
-                Circle().fill(Color(cgColor: color.cgColor)).padding(3)
+                Circle().fill(Color(cgColor: color.cgColor))
             } else {
-                Image(systemName: "plus").font(.system(size: 12, weight: .bold))
+                Circle().fill(Color(.systemGray6))
+                Image(systemName: "plus").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
             }
-            Circle().strokeBorder(Self.rainbow, lineWidth: 3)
         }
         .frame(width: 26, height: 26)
         .padding(3)
@@ -382,7 +518,7 @@ private struct SizeDot: View {
     let outlined: Bool
 
     var body: some View {
-        let diameter = 4 + CGFloat(fraction) * 18
+        let diameter = 4 + CGFloat(fraction) * 16
         Group {
             if outlined {
                 Circle().strokeBorder(.primary, lineWidth: 1.5)
@@ -392,7 +528,9 @@ private struct SizeDot: View {
         }
         .frame(width: diameter, height: diameter)
         .frame(width: 32, height: 32)
-        .background(isSelected ? Color.accentColor.opacity(0.18) : .clear, in: Circle())
+        .overlay {
+            Circle().strokeBorder(Color.accentColor, lineWidth: 2).opacity(isSelected ? 1 : 0)
+        }
         .contentShape(Circle())
     }
 }
@@ -507,7 +645,7 @@ private struct PaperSettingsView: View {
     }
 }
 
-private struct EditorSettingsView: View {
+struct EditorSettingsView: View {
     @Bindable var settings: ToolSettings
     let folderName: String?
     let onChangeFolder: () -> Void

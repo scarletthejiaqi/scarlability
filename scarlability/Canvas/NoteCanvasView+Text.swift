@@ -217,7 +217,7 @@ extension NoteCanvasView: UITextViewDelegate {
         case .color(let color): applyStyle { $0.color = color }
         case .bullets: toggleList(numbered: false)
         case .numbers: toggleList(numbered: true)
-        case .insertImage: break
+        case .insertImage, .goToPage, .scrollPage: break
         }
     }
 

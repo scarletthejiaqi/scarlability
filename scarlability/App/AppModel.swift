@@ -45,6 +45,7 @@ final class AppModel {
 
     func openNote(_ note: NotebookFolder.StoredNote) {
         guard case .ready(let library) = state else { return }
+        library.noteOpened(note)
         Task {
             do {
                 let document = try await NoteDocument.open(note, in: library.folder)

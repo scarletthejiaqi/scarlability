@@ -41,10 +41,13 @@ extension NotebookFolder {
         public var id: String
         public var name: String
         public var url: URL
+        public var color: InkColor
         public var sortIndex: Double
         public var subjects: [Subject]
 
-        public static func == (a: Divider, b: Divider) -> Bool { a.id == b.id && a.name == b.name && a.subjects == b.subjects }
+        public static func == (a: Divider, b: Divider) -> Bool {
+            a.id == b.id && a.name == b.name && a.color == b.color && a.subjects == b.subjects
+        }
         public func hash(into hasher: inout Hasher) { hasher.combine(id) }
     }
 
@@ -78,6 +81,8 @@ extension NotebookFolder {
 
     private struct DividerMarker: Codable {
         var sortIndex: Double
+        // Added after M3; optional so older markers still load.
+        var color: InkColor?
     }
 
     // MARK: - Reading
@@ -94,7 +99,8 @@ extension NotebookFolder {
                     .filter { $0.pathExtension != Self.noteExtension }
                     .map { subject(at: $0, id: "\(name)/\($0.lastPathComponent)") }
                     .sorted(by: Self.subjectOrder)
-                snapshot.dividers.append(Divider(id: name, name: name, url: folder, sortIndex: marker.sortIndex, subjects: subjects))
+                snapshot.dividers.append(Divider(id: name, name: name, url: folder, color: marker.color ?? InkColor.dividerColor,
+                                                 sortIndex: marker.sortIndex, subjects: subjects))
             } else {
                 snapshot.subjects.append(subject(at: folder, id: name))
             }
@@ -140,9 +146,10 @@ extension NotebookFolder {
     }
 
     @discardableResult
-    public func createDivider(named name: String) throws -> String {
+    public func createDivider(named name: String, color: InkColor = .dividerColor) throws -> String {
         let url = availableURL(for: name, in: root, pathExtension: nil)
-        try writeJSON(DividerMarker(sortIndex: Date().timeIntervalSinceReferenceDate), to: url.appending(path: LibraryLayout.dividerMarker))
+        try writeJSON(DividerMarker(sortIndex: Date().timeIntervalSinceReferenceDate, color: color),
+                      to: url.appending(path: LibraryLayout.dividerMarker))
         return url.lastPathComponent
     }
 
@@ -150,6 +157,12 @@ extension NotebookFolder {
         let markerURL = folderURL(forSubject: id).appending(path: LibraryLayout.subjectMarker)
         let sortIndex = (try? decodeJSON(SubjectMarker.self, from: markerURL))?.sortIndex ?? Date().timeIntervalSinceReferenceDate
         try writeJSON(SubjectMarker(color: color, sortIndex: sortIndex), to: markerURL)
+    }
+
+    public func setColor(_ color: InkColor, ofDivider id: String) throws {
+        let markerURL = root.appending(path: id, directoryHint: .isDirectory).appending(path: LibraryLayout.dividerMarker)
+        let sortIndex = (try? decodeJSON(DividerMarker.self, from: markerURL))?.sortIndex ?? Date().timeIntervalSinceReferenceDate
+        try writeJSON(DividerMarker(sortIndex: sortIndex, color: color), to: markerURL)
     }
 
     /// Renames a subject or divider folder (`id` is its path). Returns the new ID.
@@ -228,6 +241,14 @@ extension NotebookFolder {
         return destination
     }
 
+    /// Adds the note to Favorites, or takes it out.
+    public func setFavorite(_ isFavorite: Bool, noteAt url: URL) throws {
+        var record = try decodeJSON(NoteRecord.self, from: url.appending(path: "Note.json"))
+        guard record.isFavorite != isFavorite else { return }
+        record.favoritedAt = isFavorite ? Date() : nil
+        try save(record, at: url)
+    }
+
     /// Copies a note next to the original, as a new note titled "… copy".
     public func duplicateNote(at url: URL) throws -> StoredNote {
         var record = try decodeJSON(NoteRecord.self, from: url.appending(path: "Note.json"))
@@ -235,6 +256,7 @@ extension NotebookFolder {
         try coordinatedCopy(from: url, to: destination)
         record.id = UUID()
         record.title = "\(record.title) copy"
+        record.favoritedAt = nil
         record.createdAt = Date()
         record.modifiedAt = Date()
         try save(record, at: destination)
@@ -346,4 +368,7 @@ extension InkColor {
         InkColor(hex: 0x8E4EC6), // purple
         InkColor(hex: 0x8B8D98), // gray
     ]
+
+    /// Folders that hold other folders start dark gray.
+    public static let dividerColor = InkColor(hex: 0x4A4A4F)
 }

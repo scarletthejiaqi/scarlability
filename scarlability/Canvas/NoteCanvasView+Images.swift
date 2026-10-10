@@ -37,6 +37,16 @@ extension NoteCanvasView {
 
     /// Commands from the toolbar.
     func perform(_ command: EditorSession.Command) {
+        switch command {
+        case .goToPage(let pageID):
+            scrollToPage(pageID)
+            return
+        case .scrollPage(let step):
+            scrollPage(by: step)
+            return
+        default:
+            break
+        }
         guard case .insertImage(let source) = command else {
             applyTextCommand(command)
             return

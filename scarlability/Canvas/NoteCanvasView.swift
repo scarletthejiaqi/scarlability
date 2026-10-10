@@ -7,6 +7,8 @@ struct NoteCanvas: UIViewRepresentable {
     let document: NoteDocument
     let settings: ToolSettings
     let session: EditorSession
+    /// How much of the top the toolbar covers. The first page starts below it.
+    var topInset: CGFloat = 0
 
     func makeUIView(context: Context) -> NoteCanvasView {
         NoteCanvasView(document: document, settings: settings, session: session)
@@ -15,6 +17,7 @@ struct NoteCanvas: UIViewRepresentable {
     func updateUIView(_ canvas: NoteCanvasView, context: Context) {
         canvas.drawsWithFinger = settings.drawsWithFinger
         canvas.tool = settings.tool
+        canvas.topInset = topInset
     }
 }
 
@@ -172,8 +175,8 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         var startedAt = Date()
     }
 
-    /// Gray space around the column of pages, in page points.
-    static let pageMargin: CGFloat = 14
+    /// Gray space below the last page, in page points. There's none at the sides, so at the
+    /// normal zoom the page fills the screen edge to edge.
     static let bottomMargin: CGFloat = 80
     /// Maximum zoom, relative to "page width fills the screen".
     static let maxZoom: CGFloat = 5
@@ -218,6 +221,8 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
 
         scrollView.delegate = self
         scrollView.delaysContentTouches = false
+        // The toolbar floats over the pages; `topInset` makes room for it instead.
+        scrollView.contentInsetAdjustmentBehavior = .never
         scrollView.showsHorizontalScrollIndicator = false
         scrollView.blocksPanning = { [weak self] location in
             guard let self else { return false }
@@ -287,7 +292,20 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     // MARK: - Layout and zoom
 
     var contentWidth: CGFloat {
-        (document.pages.map(\.record.size.width).max() ?? PageSize.a4.width) + 2 * Self.pageMargin
+        document.pages.map(\.record.size.width).max() ?? PageSize.a4.width
+    }
+
+    /// Room at the top for the floating toolbar. When it changes while the first page is at
+    /// the top, the page stays just below the toolbar.
+    var topInset: CGFloat = 0 {
+        didSet {
+            guard topInset != oldValue else { return }
+            let wasAtTop = scrollView.contentOffset.y <= -oldValue + 0.5
+            centerContent()
+            if wasAtTop {
+                scrollView.contentOffset.y = -topInset
+            }
+        }
     }
 
     /// Zoom at which the page width fills the screen.
@@ -316,12 +334,27 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         return base * pow(2, level)
     }
 
-    /// Zoom at which a whole page fits on screen.
+    /// Zoom at which a whole page fills the screen (the toolbar floats over its top).
     var pageFitZoom: CGFloat {
         guard let size = document.pages.first?.record.size else { return widthFitZoom }
-        let inset = scrollView.adjustedContentInset
-        let height = bounds.height - inset.top - inset.bottom
-        return min(bounds.width / (size.width + 2 * Self.pageMargin), height / (size.height + 2 * Self.pageMargin))
+        let height = bounds.height - safeAreaInsets.top - safeAreaInsets.bottom
+        return min(bounds.width / size.width, height / size.height)
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        centerContent()
+        if laidOutSize != .zero {
+            updateZoomLocks()
+        }
+    }
+
+    /// The zoom locks, and how far out you can zoom.
+    func updateZoomLocks() {
+        // In portrait an A4 page that fills the width also nearly fills the height: one lock, not two.
+        let pageFit = pageFitZoom
+        zoomDetents = ZoomDetents(zooms: abs(pageFit / widthFitZoom - 1) < 0.02 ? [widthFitZoom] : [widthFitZoom, pageFit])
+        scrollView.minimumZoomScale = min(widthFitZoom, pageFit) * 0.6
     }
 
     override func layoutSubviews() {
@@ -332,11 +365,10 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         let widthChanged = bounds.width != laidOutSize.width
         laidOutSize = bounds.size
 
-        zoomDetents = ZoomDetents(zooms: [widthFitZoom, pageFitZoom])
+        updateZoomLocks()
         for view in pageViews.values {
             view.tileScale = tileScale
         }
-        scrollView.minimumZoomScale = min(widthFitZoom, pageFitZoom) * 0.6
         scrollView.maximumZoomScale = widthFitZoom * Self.maxZoom
         if widthChanged {
             scrollView.zoomScale = widthFitZoom * relativeZoom
@@ -354,7 +386,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
 
     func layoutPages() {
         let width = contentWidth
-        var y = Self.pageMargin
+        var y: CGFloat = 0
         for page in document.pages {
             guard let view = pageViews[page.id] else { continue }
             let size = page.record.size
@@ -375,7 +407,37 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     func centerContent() {
         let inset = max(0, (scrollView.bounds.width - scrollView.contentSize.width) / 2)
         // Room at the bottom for the keyboard, so you can scroll the last lines above it.
-        scrollView.contentInset = UIEdgeInsets(top: 0, left: inset, bottom: keyboardOverlap, right: inset)
+        scrollView.contentInset = UIEdgeInsets(top: topInset, left: inset, bottom: max(keyboardOverlap, safeAreaInsets.bottom), right: inset)
+    }
+
+    /// Remembers which page is in the middle of the screen, for "this page" paper changes and
+    /// the page number.
+    func updateVisiblePage() {
+        let middle = scrollView.convert(CGPoint(x: scrollView.bounds.midX, y: scrollView.bounds.midY), to: contentView)
+        let page = document.pages.first { pageViews[$0.id].map { $0.frame.minY <= middle.y && middle.y < $0.frame.maxY } ?? false }
+            ?? (middle.y < 0 ? document.pages.first : document.pages.last)
+        document.visiblePageID = page?.id
+        if session.visiblePageID != page?.id {
+            session.visiblePageID = page?.id
+        }
+    }
+
+    /// Scrolls so a page's top is just below the toolbar.
+    func scrollToPage(_ pageID: UUID) {
+        guard let view = pageViews[pageID] else { return }
+        let inset = scrollView.adjustedContentInset
+        let maxY = max(-inset.top, scrollView.contentSize.height - scrollView.bounds.height + inset.bottom)
+        let y = min(max(view.frame.minY * scrollView.zoomScale - inset.top, -inset.top), maxY)
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: y), animated: false)
+        updateVisiblePage()
+    }
+
+    /// The page before or after the one in the middle of the screen.
+    func scrollPage(by step: Int) {
+        let current = session.visiblePageID.flatMap { document.pageIndex($0) } ?? 0
+        let index = min(max(current + step, 0), document.pages.count - 1)
+        guard document.pages.indices.contains(index) else { return }
+        scrollToPage(document.pages[index].id)
     }
 
     /// All the pages, in content coordinates.
@@ -408,11 +470,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         layoutTextEditor()
         layoutCropControls()
         repositionActionBar()
-        // Remember which page is in the middle of the screen, for "this page" paper changes.
-        let middle = scrollView.convert(CGPoint(x: scrollView.bounds.midX, y: scrollView.bounds.midY), to: contentView)
-        if let page = document.pages.first(where: { pageViews[$0.id]?.frame.minY ?? .infinity <= middle.y && middle.y < pageViews[$0.id]?.frame.maxY ?? -.infinity }) {
-            document.visiblePageID = page.id
-        }
+        updateVisiblePage()
     }
 
     @objc private func handlePinch(_ pinch: UIPinchGestureRecognizer) {
@@ -447,14 +505,16 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     // MARK: - Document changes
 
     func documentDidChange(_ change: NoteDocument.Change) {
+        // Drop a selection whose strokes are gone, or whose page was deleted.
         if let selection, manipulation == nil, selection.strokes.contains(where: { placed in
             !(document.pages.first { $0.id == placed.pageID }?.visibleStrokes.contains { $0.id == placed.stroke.id } ?? false)
-        }) {
+        }) || selection.items.contains(where: { document.pageIndex($0.pageID) == nil }) {
             clearSelection()
         }
         switch change {
         case .pagesChanged:
             syncPageViews()
+            updateVisiblePage()
         case .inkChanged(let pageID, let area):
             updateInk(onPage: pageID, changedRect: area)
         case .pageRedraw(let pageID):
@@ -921,6 +981,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     /// - `-DebugUndoAfterStroke`: undoes it 2 seconds later.
     /// - `-DebugTools`: replays a highlight, a snapped circle, then a whole-stroke erase and a lasso.
     /// - `-DebugSelectAll`: selects everything on page 1 and shows the action bar.
+    /// - `-DebugPages`: adds two pages, then deletes the first.
     /// - `-DebugZoom 2`: zooms in first.
     func startDebugScenarioIfRequested() {
         let zoom = UserDefaults.standard.double(forKey: "DebugZoom")
@@ -928,6 +989,18 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             scrollView.zoomScale = widthFitZoom * zoom
         }
         let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-DebugPages") {
+            // Add two pages, then delete the first one; the note should keep the rest.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [self] in
+                document.addPage()
+                let added = document.addPage()
+                scrollToPage(added)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [self] in
+                if let first = document.pages.first { document.deletePage(first.id) }
+            }
+            return
+        }
         if arguments.contains("-DebugSelectAll"), let page = document.pages.first {
             settings.tool = .select
             setSelection(strokes: page.visibleStrokes.map { .init(stroke: $0, pageID: page.id) },

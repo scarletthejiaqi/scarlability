@@ -73,11 +73,12 @@ public struct NotebookFolder: Sendable {
 
     // MARK: - Pages
 
-    /// Loads a note's pages in order, with every device's ink.
+    /// Loads a note's pages in order, with every device's ink. Deleted pages are left out.
     public func loadPages(inNoteAt noteURL: URL) throws -> [LoadedPage] {
         var pages: [LoadedPage] = []
         for directory in try subdirectories(of: pagesDirectory(noteURL)) {
-            guard let record = try? decodeJSON(PageRecord.self, from: directory.appending(path: "Page.json")) else {
+            guard let record = try? decodeJSON(PageRecord.self, from: directory.appending(path: "Page.json")),
+                  record.deletedAt == nil else {
                 continue
             }
             var inks: [UUID: DeviceInk] = [:]

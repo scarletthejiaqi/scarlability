@@ -23,6 +23,8 @@ final class NoteDocument {
         var isSaved: Bool
         private(set) var visibleStrokes: [Stroke] = []
         private(set) var visibleItems: [PageItem] = []
+        /// Goes up whenever what's on the page changes, so page thumbnails know to redraw.
+        var revision = 0
 
         var id: UUID { record.id }
 
@@ -43,6 +45,7 @@ final class NoteDocument {
         mutating func refreshVisibleStrokes() {
             visibleStrokes = InkMerge.visibleStrokes(from: [ownInk] + otherInks.values)
             visibleItems = ItemMerge.visibleItems(from: [ownItems] + otherItems.values)
+            revision += 1
         }
     }
 
@@ -343,11 +346,11 @@ final class NoteDocument {
     }
 
     /// Reads and decodes an image from the note package.
-    func loadImage(named fileName: String) async -> CGImage? {
+    func loadImage(named fileName: String, maxPixelSize: Int = 2400) async -> CGImage? {
         let folder = folder, location = location
         let data = try? await NotesIO.run { folder.loadImageData(named: fileName, inNoteAt: location.url) }
         guard let data = data ?? nil else { return nil }
-        return await Task.detached(priority: .userInitiated) { ImageLoading.cgImage(from: data) }.value
+        return await Task.detached(priority: .userInitiated) { ImageLoading.cgImage(from: data, maxPixelSize: maxPixelSize) }.value
     }
 
     /// Adds scanned pages (each an image file already saved) after a page, as page backgrounds.
@@ -391,6 +394,57 @@ final class NoteDocument {
         scheduleSave()
     }
 
+    /// Adds a blank page at the end (the + in the page panel) and returns its ID. The blank last
+    /// page that's always there becomes a real page, so the note grows by one.
+    @discardableResult
+    func addPage() -> UUID {
+        if let last = pages.indices.last, !pages[last].isSaved {
+            pages[last].isSaved = true
+            pageRecordsToSave.insert(pages[last].id)
+        }
+        appendBlankPage()
+        let index = pages.count - 1
+        pages[index].isSaved = true
+        pageRecordsToSave.insert(pages[index].id)
+        note.modifiedAt = Date()
+        noteNeedsSave = true
+        scheduleSave()
+        onChange?(.pagesChanged)
+        return pages[index].id
+    }
+
+    /// Deletes a page. Its files stay in the package with the page marked deleted, so another
+    /// device that still has the note open can't bring the page back by saving to it.
+    func deletePage(_ pageID: UUID) {
+        guard let index = pageIndex(pageID) else { return }
+        var record = pages[index].record
+        let wasSaved = pages[index].isSaved
+        pages.remove(at: index)
+        pageRecordsToSave.remove(pageID)
+        inkToSave.remove(pageID)
+        itemsToSave.remove(pageID)
+        if wasSaved {
+            record.deletedAt = Date()
+            let folder = folder, location = location
+            // Queued after any save already on its way, so this is the page's last word.
+            NotesIO.queue.async {
+                do {
+                    try folder.save(record, inNoteAt: location.url)
+                } catch {
+                    Self.logger.error("Deleting a page failed: \(error)")
+                }
+            }
+        }
+        if visiblePageID == pageID {
+            visiblePageID = nil
+        }
+        note.modifiedAt = Date()
+        noteNeedsSave = true
+        scheduleSave()
+        _ = normalizeTrailingPages()
+        onChange?(.pagesChanged)
+    }
+
     func pageIndex(_ pageID: UUID) -> Int? {
         pages.firstIndex { $0.id == pageID }
     }
@@ -421,6 +475,7 @@ final class NoteDocument {
         if pages[index].isSaved {
             pageRecordsToSave.insert(pages[index].id)
         }
+        pages[index].revision += 1
         onChange?(.pageRedraw(pageID: pages[index].id))
     }
 

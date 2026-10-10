@@ -15,6 +15,10 @@ public struct NoteRecord: Codable, Identifiable, Hashable, Sendable {
     /// The subject folder it was deleted from (relative to the notes folder; nil for Unfiled),
     /// so Restore can put it back.
     public var deletedFrom: String?
+    /// When the note was added to Favorites (nil if it isn't a favorite).
+    public var favoritedAt: Date?
+
+    public var isFavorite: Bool { favoritedAt != nil }
 
     public init(
         id: UUID = UUID(),
@@ -44,6 +48,9 @@ public struct PageRecord: Codable, Identifiable, Hashable, Sendable {
     /// Fills the page under everything, e.g. a scanned document.
     public var background: PageBackground?
     public var createdAt: Date
+    /// When the page was deleted. Deleted pages stay in the package, hidden, so a device that
+    /// still has the page open can't bring it back by saving its ink.
+    public var deletedAt: Date?
 
     public init(id: UUID = UUID(), sortKey: Double, size: CGSize, paper: PaperStyle, createdAt: Date = Date()) {
         self.id = id
