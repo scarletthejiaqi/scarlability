@@ -62,7 +62,40 @@ final class AppModel {
                 }
                 #endif
                 openDocument = document
+                document.startWatching()
                 #if DEBUG
+                // `-DebugSync`: 2 seconds after opening, "another device" writes blue ink on page 1,
+                // adds a page with writing on it, and renames the note (moving its package).
+                if ProcessInfo.processInfo.arguments.contains("-DebugSync"), let first = document.pages.first {
+                    let other = NotebookFolder(root: library.folder.root, deviceID: UUID())
+                    let firstID = first.id, lastKey = (document.pages.filter(\.isSaved).last?.record.sortKey ?? 1)
+                    let url = await document.currentURL()
+                    try? await Task.sleep(for: .seconds(2))
+                    _ = try? await NotesIO.run {
+                        let swirl = Stroke(color: .blue, points: (0..<200).map { i in
+                            let t = Double(i) / 200 * 6 * .pi
+                            return InkPoint(x: Float(300 + 60 * cos(t) + 8 * t), y: Float(500 + 60 * sin(t)), width: 3)
+                        })
+                        try other.saveOwnInk(DeviceInk(strokes: [swirl]), page: firstID, inNoteAt: url)
+                        let page = PageRecord(sortKey: lastKey + 0.5, size: PageSize.a4, paper: .whiteLined)
+                        try other.save(page, inNoteAt: url)
+                        try other.saveOwnInk(DeviceInk(strokes: DemoInk.strokes(color: .blue)), page: page.id, inNoteAt: url)
+                        _ = try other.renameNote(at: url, to: "Renamed on the Mac")
+                    }
+                    // Write here right away, before the next check notices the rename: the save
+                    // must land in the renamed note, not make a stray copy under the old name.
+                    if let page = document.pages.first {
+                        document.addStroke([.init(stroke: Stroke(color: .red, points: DemoInk.strokes()[0].points), pageID: page.id)])
+                        document.saveNow()
+                    }
+                }
+                // `-DebugSyncDelete`: 2 seconds after opening, "another device" deletes the note.
+                if ProcessInfo.processInfo.arguments.contains("-DebugSyncDelete") {
+                    let other = NotebookFolder(root: library.folder.root, deviceID: UUID())
+                    let url = await document.currentURL()
+                    try? await Task.sleep(for: .seconds(2))
+                    _ = try? await NotesIO.run { try other.deleteNote(at: url) }
+                }
                 // Rename while open, write right after, then close: checks no stray copy is left.
                 if ProcessInfo.processInfo.arguments.contains("-DebugRenameOpenNote") {
                     document.rename(to: "Renamed Note")
@@ -121,6 +154,7 @@ final class AppModel {
 
     /// Saves and closes the open note, and refreshes the library (titles, thumbnails).
     func closeDocument() {
+        openDocument?.stopWatching()
         openDocument?.saveNow()
         openDocument = nil
         if case .ready(let library) = state {
@@ -137,10 +171,24 @@ final class AppModel {
         Task {
             await library.reload()
             state = .ready(library)
+            // Picks up what other devices change, while the library is showing.
+            library.startWatching { [weak self] in self?.openDocument != nil }
             #if DEBUG
             let arguments = ProcessInfo.processInfo.arguments
             if arguments.contains("-SeedLibrary") {
                 await library.seedDemoLibraryIfEmpty()
+            }
+            // `-DebugSyncLibrary`: 2 seconds in, "another device" adds a note to the first folder.
+            if arguments.contains("-DebugSyncLibrary") {
+                let other = NotebookFolder(root: library.folder.root, deviceID: UUID())
+                let subject = library.snapshot.allSubjects.first?.id
+                try? await Task.sleep(for: .seconds(2))
+                _ = try? await NotesIO.run {
+                    let note = try other.createNote(title: "Written on the Mac", inSubject: subject)
+                    let page = PageRecord(sortKey: 1, size: PageSize.a4, paper: .whiteLined)
+                    try other.save(page, inNoteAt: note.url)
+                    try other.saveOwnInk(DeviceInk(strokes: DemoInk.strokes(color: .blue)), page: page.id, inNoteAt: note.url)
+                }
             }
             // `-SeedPDF`: import a demo lecture PDF as a new note and open it.
             if arguments.contains("-SeedPDF") {

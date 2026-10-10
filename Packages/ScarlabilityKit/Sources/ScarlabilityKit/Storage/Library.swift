@@ -58,6 +58,8 @@ extension NotebookFolder {
         public var subjects: [Subject] = []
         public var dividers: [Divider] = []
         public var recentlyDeleted: [StoredNote] = []
+        /// Notes iCloud is still downloading (only placeholders so far).
+        public var downloading = 0
 
         public init() {}
 
@@ -90,8 +92,13 @@ extension NotebookFolder {
     public func loadLibrary() throws -> LibrarySnapshot {
         var snapshot = LibrarySnapshot()
         snapshot.unfiled = notes(in: root)
+        snapshot.downloading = requestDownloads(in: root)
         for folder in try subdirectories(of: root) where folder.pathExtension != Self.noteExtension {
             let name = folder.lastPathComponent
+            snapshot.downloading += requestDownloads(in: folder)
+            for inner in (try? subdirectories(of: folder)) ?? [] where inner.pathExtension != Self.noteExtension {
+                snapshot.downloading += requestDownloads(in: inner)
+            }
             if name == LibraryLayout.recentlyDeletedName {
                 snapshot.recentlyDeleted = notes(in: folder)
             } else if let marker = try? decodeJSON(DividerMarker.self, from: folder.appending(path: LibraryLayout.dividerMarker)) {
@@ -124,6 +131,7 @@ extension NotebookFolder {
         ((try? contents(of: folder)) ?? [])
             .filter { $0.pathExtension == Self.noteExtension }
             .compactMap { url in
+                resolveNoteConflicts(at: url.appending(path: "Note.json"))
                 guard let record = try? decodeJSON(NoteRecord.self, from: url.appending(path: "Note.json")) else { return nil }
                 return StoredNote(url: url, record: record)
             }

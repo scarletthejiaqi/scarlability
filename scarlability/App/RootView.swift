@@ -17,7 +17,10 @@ struct RootView: View {
                 if phase != .active {
                     // Write pending changes before the app might be suspended.
                     model.openDocument?.saveNow()
-                } else if case .ready(let library) = model.state, model.openDocument == nil {
+                } else if let document = model.openDocument {
+                    // Pick up what other devices wrote while away.
+                    document.checkForChangesNow()
+                } else if case .ready(let library) = model.state {
                     // Pick up notes changed on other devices while away.
                     Task { await library.reload() }
                 }

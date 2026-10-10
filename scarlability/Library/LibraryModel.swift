@@ -64,6 +64,8 @@ final class LibraryModel {
     }
     /// Set when a library action fails, to show the user.
     var errorMessage: String?
+    /// The alert's title for `errorMessage`, when it isn't a failure.
+    var errorTitle: String?
     private(set) var thumbnails: [UUID: Thumb] = [:]
 
     struct Thumb {
@@ -72,6 +74,8 @@ final class LibraryModel {
     }
 
     @ObservationIgnored private var thumbnailsInProgress: Set<UUID> = []
+    @ObservationIgnored private var lastStamp: String?
+    @ObservationIgnored private var watchTask: Task<Void, Never>?
     nonisolated private static let thumbnailQueue = DispatchQueue(label: "scarlability.thumbnails", qos: .utility)
     nonisolated private static let logger = Logger(subsystem: "scarlability", category: "Library")
     private static let sortKey = "librarySort"
@@ -152,6 +156,28 @@ final class LibraryModel {
     }
 
     // MARK: - Loading
+
+    /// Checks every few seconds whether the folder changed (another device added, edited,
+    /// renamed or deleted something, or iCloud finished downloading a note) and reloads if so.
+    /// - Parameter isPaused: True while the library isn't showing (a note is open).
+    func startWatching(isPaused: @escaping () -> Bool) {
+        guard watchTask == nil else { return }
+        let folder = folder
+        watchTask = Task { [weak self] in
+            // What's there now (just loaded); changes after this reload the library.
+            let initial = try? await NotesIO.run { folder.libraryStamp() }
+            self?.lastStamp = initial
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard let self, !Task.isCancelled else { return }
+                guard !isPaused() else { continue }
+                let stamp = try? await NotesIO.run { folder.libraryStamp() }
+                guard let stamp, stamp != self.lastStamp || self.snapshot.downloading > 0 else { continue }
+                self.lastStamp = stamp
+                await self.reload()
+            }
+        }
+    }
 
     func reload() async {
         let folder = folder

@@ -133,17 +133,41 @@ final class NoteDocument {
     /// saves queued around it always agree on where the note is.
     nonisolated private final class Location: @unchecked Sendable {
         var url: URL
-        init(_ url: URL) { self.url = url }
+        let noteID: UUID
+        let folder: NotebookFolder
+
+        init(_ url: URL, noteID: UUID, folder: NotebookFolder) {
+            self.url = url
+            self.noteID = noteID
+            self.folder = folder
+        }
+
+        /// Where the note is now. If another device renamed or moved it, finds it again; nil if
+        /// it's gone (deleted for good elsewhere), so a save never leaves a stray half-copy.
+        func resolved() -> URL? {
+            if FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) { return url }
+            guard let moved = folder.findNote(id: noteID) else { return nil }
+            url = moved
+            return moved
+        }
     }
     @ObservationIgnored private let location: Location
     private(set) var pages: [Page]
     /// Set when writing to the notes folder fails; cleared by the next successful save.
     private(set) var saveFailed = false
+    /// Another device moved the note to Recently Deleted while it was open here.
+    private(set) var wasDeletedElsewhere = false
     private var history = UndoHistory<AppliedChange>()
     /// Changes applied since `beginGroup()`, recorded as one undo step by `endGroup()`.
     @ObservationIgnored private var openGroup: AppliedChange?
     /// The page in the middle of the screen; set by the canvas. Paper changes for "this page" use it.
     @ObservationIgnored var visiblePageID: UUID?
+    /// Pages known to be saved in the folder, so a page missing there was deleted by another
+    /// device (rather than made here and not written yet).
+    @ObservationIgnored private var pagesOnDisk: Set<UUID> = []
+    /// The last `NotebookFolder.changeStamp` seen, and the loop checking it.
+    @ObservationIgnored private var lastStamp: String?
+    @ObservationIgnored private var watchTask: Task<Void, Never>?
     @ObservationIgnored private var pdfFiles: [String: PDFFile] = [:]
     @ObservationIgnored private var pdfData: [String: Data] = [:]
     @ObservationIgnored private var textPDFs: [String: PDFDocument] = [:]
@@ -168,7 +192,7 @@ final class NoteDocument {
 
     init(note: NotebookFolder.StoredNote, loadedPages: [NotebookFolder.LoadedPage], folder: NotebookFolder) {
         self.note = note.record
-        self.location = Location(note.url)
+        self.location = Location(note.url, noteID: note.record.id, folder: folder)
         self.folder = folder
         self.pages = loadedPages.map { loaded in
             var others = loaded.inks
@@ -177,6 +201,7 @@ final class NoteDocument {
             let ownItems = otherItems.removeValue(forKey: folder.deviceID) ?? DeviceItems()
             return Page(record: loaded.record, ownInk: own, otherInks: others, ownItems: ownItems, otherItems: otherItems, isSaved: true)
         }
+        pagesOnDisk = Set(loadedPages.map(\.record.id))
         _ = normalizeTrailingPages()
     }
 
@@ -198,7 +223,8 @@ final class NoteDocument {
         let folder = folder, location = location
         NotesIO.queue.async {
             do {
-                location.url = try folder.renameNote(at: location.url, to: title)
+                guard let current = location.resolved() else { return }
+                location.url = try folder.renameNote(at: current, to: title)
             } catch {
                 Self.logger.error("Renaming note failed: \(error)")
             }
@@ -210,7 +236,7 @@ final class NoteDocument {
         saveNow()
         let location = location
         return await withCheckedContinuation { continuation in
-            NotesIO.queue.async { continuation.resume(returning: location.url) }
+            NotesIO.queue.async { continuation.resume(returning: location.resolved() ?? location.url) }
         }
     }
 
@@ -353,7 +379,8 @@ final class NoteDocument {
         let folder = folder, location = location
         NotesIO.queue.async {
             do {
-                try folder.saveImage(data, named: fileName, inNoteAt: location.url)
+                guard let noteURL = location.resolved() else { return }
+                try folder.saveImage(data, named: fileName, inNoteAt: noteURL)
             } catch {
                 Self.logger.error("Saving image failed: \(error)")
             }
@@ -393,7 +420,8 @@ final class NoteDocument {
         // Saved before the pages that show it, on the same queue.
         NotesIO.queue.async {
             do {
-                try folder.savePDF(data, named: fileName, inNoteAt: location.url)
+                guard let noteURL = location.resolved() else { return }
+                try folder.savePDF(data, named: fileName, inNoteAt: noteURL)
             } catch {
                 Self.logger.error("Saving PDF failed: \(error)")
             }
@@ -488,6 +516,7 @@ final class NoteDocument {
     /// device that still has the note open can't bring the page back by saving to it.
     func deletePage(_ pageID: UUID) {
         guard let index = pageIndex(pageID) else { return }
+        pagesOnDisk.remove(pageID)
         var record = pages[index].record
         let wasSaved = pages[index].isSaved
         pages.remove(at: index)
@@ -500,7 +529,8 @@ final class NoteDocument {
             // Queued after any save already on its way, so this is the page's last word.
             NotesIO.queue.async {
                 do {
-                    try folder.save(record, inNoteAt: location.url)
+                    guard let noteURL = location.resolved() else { return }
+                    try folder.save(record, inNoteAt: noteURL)
                 } catch {
                     Self.logger.error("Deleting a page failed: \(error)")
                 }
@@ -575,6 +605,125 @@ final class NoteDocument {
         pages.append(Page(record: record, ownInk: DeviceInk(), otherInks: [:], isSaved: false))
     }
 
+    // MARK: - Changes from other devices
+
+    /// While the note is open, checks every few seconds whether another device changed it (or
+    /// renamed or moved it) and merges what it wrote. iCloud Drive decides when files arrive,
+    /// usually within seconds to a minute.
+    func startWatching() {
+        guard watchTask == nil else { return }
+        watchTask = Task { [weak self] in
+            // What's there now, as loaded; changes after this get merged.
+            if let self {
+                let folder = self.folder, location = self.location
+                self.lastStamp = try? await NotesIO.run { folder.changeStamp(inNoteAt: location.url) }
+            }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.watchInterval)
+                guard let self, !Task.isCancelled else { return }
+                await self.checkForChanges()
+            }
+        }
+    }
+
+    func stopWatching() {
+        watchTask?.cancel()
+        watchTask = nil
+    }
+
+    static let watchInterval: Duration = .seconds(3)
+
+    /// Checks right away (when the app comes back to the front).
+    func checkForChangesNow() {
+        Task { await checkForChanges() }
+    }
+
+    private func checkForChanges() async {
+        let folder = folder, location = location
+        let stamp = try? await NotesIO.run { () -> String? in
+            // Renamed or moved on another device: follow it.
+            guard let noteURL = location.resolved() else { return nil }
+            return folder.changeStamp(inNoteAt: noteURL)
+        }
+        let trash = folder.root.appending(path: LibraryLayout.recentlyDeletedName).standardizedFileURL.path(percentEncoded: false)
+        if location.url.standardizedFileURL.path(percentEncoded: false).hasPrefix(trash) {
+            wasDeletedElsewhere = true
+            return
+        }
+        guard let stamp = stamp ?? nil, stamp != lastStamp else { return }
+        lastStamp = stamp
+        await mergeFromDisk()
+    }
+
+    /// Reads the note again and merges other devices' changes into it.
+    func mergeFromDisk() async {
+        let folder = folder, location = location
+        guard let (record, loaded) = try? await NotesIO.run({
+            (try? folder.loadRecord(ofNoteAt: location.url), try folder.loadPages(inNoteAt: location.url))
+        }) else { return }
+        merge(record: record, pages: loaded)
+    }
+
+    /// Takes in what other devices saved: their ink, text and images on each page, pages they
+    /// added or deleted, paper changes, and a new title. This device's own ink, and anything
+    /// changed here but not saved yet, stay as they are.
+    func merge(record: NoteRecord?, pages loaded: [NotebookFolder.LoadedPage]) {
+        let device = folder.deviceID
+        if let record, !noteNeedsSave, record.title != note.title || record.favoritedAt != note.favoritedAt || record.defaultPaper != note.defaultPaper {
+            note.title = record.title
+            note.favoritedAt = record.favoritedAt
+            note.defaultPaper = record.defaultPaper
+        }
+        var pagesChanged = false
+        var redraw: [UUID] = []
+        let loadedIDs = Set(loaded.map(\.record.id))
+        for page in loaded {
+            var others = page.inks
+            others.removeValue(forKey: device)
+            var otherItems = page.items
+            otherItems.removeValue(forKey: device)
+            pagesOnDisk.insert(page.record.id)
+            guard let index = pageIndex(page.record.id) else {
+                // A page another device added.
+                pages.append(Page(record: page.record, ownInk: page.inks[device] ?? DeviceInk(), otherInks: others,
+                                  ownItems: page.items[device] ?? DeviceItems(), otherItems: otherItems, isSaved: true))
+                pagesChanged = true
+                continue
+            }
+            var changed = false
+            if pages[index].otherInks != others || pages[index].otherItems != otherItems {
+                pages[index].otherInks = others
+                pages[index].otherItems = otherItems
+                pages[index].refreshVisibleStrokes()
+                changed = true
+            }
+            if !pageRecordsToSave.contains(page.record.id), pages[index].isSaved, page.record != pages[index].record {
+                if page.record.sortKey != pages[index].record.sortKey { pagesChanged = true }
+                pages[index].record = page.record
+                pages[index].revision += 1
+                changed = true
+            }
+            if changed { redraw.append(page.record.id) }
+        }
+        // Pages another device deleted.
+        let deleted = pages.filter { pagesOnDisk.contains($0.id) && !loadedIDs.contains($0.id) }.map(\.id)
+        if !deleted.isEmpty {
+            pages.removeAll { deleted.contains($0.id) }
+            pagesOnDisk.subtract(deleted)
+            pagesChanged = true
+        }
+        if pagesChanged {
+            // Saved pages in order; the blank last page (not saved yet) stays last.
+            let saved = pages.filter(\.isSaved).sorted { ($0.record.sortKey, $0.id.uuidString) < ($1.record.sortKey, $1.id.uuidString) }
+            pages = saved + pages.filter { !$0.isSaved }
+            _ = normalizeTrailingPages()
+            onChange?(.pagesChanged)
+        }
+        for pageID in redraw where pageIndex(pageID) != nil {
+            onChange?(.pageRedraw(pageID: pageID))
+        }
+    }
+
     // MARK: - Saving
 
     private func inkDidChange(onPageAt index: Int) {
@@ -615,9 +764,10 @@ final class NoteDocument {
         let folder = folder
         let location = location
         NotesIO.queue.async {
-            let noteURL = location.url
             let failed: Bool
             do {
+                // The note may have been renamed or moved on another device since.
+                guard let noteURL = location.resolved() else { throw CocoaError(.fileNoSuchFile) }
                 // Page records first, so another device never sees ink for a page it doesn't know.
                 for record in records {
                     try folder.save(record, inNoteAt: noteURL)
@@ -628,12 +778,16 @@ final class NoteDocument {
                 for (pageID, pageItems) in items {
                     try folder.saveOwnItems(pageItems, page: pageID, inNoteAt: noteURL)
                 }
-                if let note {
+                if var note {
+                    // Favorites are set from the library, maybe on another device: keep its choice.
+                    if let saved = try? folder.loadRecord(ofNoteAt: noteURL) {
+                        note.favoritedAt = saved.favoritedAt
+                    }
                     try folder.save(note, at: noteURL)
                 }
                 failed = false
             } catch {
-                Self.logger.error("Saving \(noteURL.lastPathComponent) failed: \(error)")
+                Self.logger.error("Saving \(location.url.lastPathComponent) failed: \(error)")
                 failed = true
             }
             Task { @MainActor [weak self] in
@@ -644,7 +798,10 @@ final class NoteDocument {
 
     private func saveDidFinish(failed: Bool, records: [UUID], inks: [UUID]) {
         saveFailed = failed
-        guard failed else { return }
+        guard failed else {
+            pagesOnDisk.formUnion(records)
+            return
+        }
         // Keep the changes queued so the next save retries them.
         noteNeedsSave = true
         pageRecordsToSave.formUnion(records)

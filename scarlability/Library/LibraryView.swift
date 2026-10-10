@@ -19,9 +19,9 @@ struct LibraryView: View {
                 .ignoresSafeArea()
             NotesBrowser(library: library, model: model)
         }
-        .alert("Something went wrong", isPresented: Binding(
+        .alert(library.errorTitle ?? "Something went wrong", isPresented: Binding(
             get: { library.errorMessage != nil },
-            set: { if !$0 { library.errorMessage = nil } }
+            set: { if !$0 { library.errorMessage = nil; library.errorTitle = nil } }
         )) {
             Button("OK") {}
         } message: {
@@ -493,6 +493,16 @@ private struct NotesBrowser: View {
                 tabs
                     .padding(.horizontal, 28)
                     .padding(.top, 6)
+            }
+            if library.snapshot.downloading > 0 {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Downloading \(library.snapshot.downloading) note\(library.snapshot.downloading == 1 ? "" : "s") from iCloud…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 28)
+                .padding(.top, 12)
             }
             ScrollView {
                 if notes.isEmpty {

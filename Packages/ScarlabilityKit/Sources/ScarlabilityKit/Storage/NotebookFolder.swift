@@ -73,6 +73,10 @@ public struct NotebookFolder: Sendable {
         try? loadPages(inNoteAt: noteURL).first
     }
 
+    public func loadRecord(ofNoteAt noteURL: URL) throws -> NoteRecord {
+        try decodeJSON(NoteRecord.self, from: noteURL.appending(path: "Note.json"))
+    }
+
     public func save(_ record: NoteRecord, at noteURL: URL) throws {
         try writeJSON(record, to: noteURL.appending(path: "Note.json"))
     }
@@ -82,7 +86,11 @@ public struct NotebookFolder: Sendable {
     /// Loads a note's pages in order, with every device's ink. Deleted pages are left out.
     public func loadPages(inNoteAt noteURL: URL) throws -> [LoadedPage] {
         var pages: [LoadedPage] = []
+        requestDownloads(in: pagesDirectory(noteURL))
         for directory in try subdirectories(of: pagesDirectory(noteURL)) {
+            // Another device's files iCloud hasn't downloaded yet show up next time.
+            requestDownloads(in: directory)
+            resolvePageConflicts(at: directory.appending(path: "Page.json"))
             guard let record = try? decodeJSON(PageRecord.self, from: directory.appending(path: "Page.json")),
                   record.deletedAt == nil else {
                 continue

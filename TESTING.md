@@ -176,6 +176,21 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] Make the window bigger and smaller: the page keeps filling the width, without flashing.
 - [ ] **iPad with a keyboard:** the same shortcuts work. Hold ⌘ to see them.
 
+## 13e. Sync between iPad and Mac (M7)
+**Set up:** on both devices, the notes folder is **iCloud Drive → Scarlability** (Settings → Notes folder shows it). Both devices signed in to the same Apple ID with iCloud Drive on. iCloud decides when files move: usually seconds, sometimes a minute or two.
+- [ ] Make a note on the iPad and write in it. Within a minute it shows in the Mac's library (no need to restart; the library checks every few seconds).
+- [ ] **Same note open on both:** write on the iPad; a few seconds after iCloud delivers it, the writing appears on the Mac's open page (and the other way round). Nothing you wrote on either device is lost.
+- [ ] Erase something on one device: it disappears on the other.
+- [ ] Text boxes and pictures: edit one on one device; the other shows the newest version.
+- [ ] Add or delete a page on one device: the other's page panel and page count follow.
+- [ ] Rename a note, move it to another folder, or favorite it on one device: the other follows, even while that note is open there (the title above the toolbar changes).
+- [ ] Delete a note on one device while it's open on the other: the other closes it and says it's in Recently Deleted.
+- [ ] New folders and folder groups, renamed or recolored folders: show up on the other device.
+- [ ] **Not downloaded yet:** on a device that hasn't downloaded everything (e.g. a new Mac), the library says "Downloading N notes from iCloud…" and they appear as they arrive.
+- [ ] **Offline:** turn on Airplane Mode on the iPad, write, turn it off. The writing reaches the Mac afterwards.
+- [ ] Write on both devices at the same moment in the same note (one on each page, or on the same page). Afterwards both devices show both sets of writing.
+- [ ] Files app (or Finder on the Mac): no duplicate "… 2" copies of notes appear from syncing.
+
 ## 14. Questions to answer while testing
 1. **Pressure feel:** too subtle, too strong, or right compared to Notability?
 2. **Smoothing:** too much (letters look rounded), too little (still bumpy), or right?

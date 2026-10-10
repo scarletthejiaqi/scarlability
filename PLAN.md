@@ -1,4 +1,4 @@
-# Scarlability — Build Plan (v10: M5 and M6 built; all testing at the end, see TESTING.md)
+# Scarlability — Build Plan (v11: M5, M6 and M7 built; all testing at the end, see TESTING.md)
 
 A note-taking app for **iPad + Mac** that copies the *basic* parts of Notability:
 1. Notability-style tools: pressure pen, highlighter, eraser, text, selection, shape snap
@@ -148,7 +148,7 @@ iCloud Drive/Scarlability/          ← made inside the place you pick
 | **M4.5** ✅ built | Notability look: library with Search, Notes (count), Folders (colored dots; folder groups fold open) and Recently Deleted; All Notes / Recents / Favorites / Unfiled tabs; cards with folder tags; ★ Favorites; + New. Note screen: page fills the screen edge to edge (zoom lock with no gray edge), floating toolbar (tools, 7 colors, 3 sizes, finger drawing), page number with ⌃/⌄, page panel with thumbnails, add and delete pages. Also: smoother, lag-free writing and the Delete-first selection bar | Use an app that looks and feels like Notability |
 | **M5** ✅ built | PDF: import (new note, into a note, or "Open in" from other apps), vector PDF pages, annotate, Snap to Text highlighter, export (all / this page / range; with or without paper; several notes as one PDF or one each) | Annotate lecture slides and export them |
 | **M6** ✅ built | Mac app (Mac Catalyst, like Notability's Mac app): same library + editor, mouse/trackpad drawing, two-finger scroll, trackpad pinch zoom, menu bar (File/Edit/Tools) and keyboard shortcuts (⌘N, ⇧⌘I, ⌘Z, ⌘C/⌘X/⌘V, ⌘A, ⌫, ⌘D, ⌘1–5, ⌘=/⌘-/⌘0), runs on macOS 15 | Use the app on your MacBook |
-| **M7** | Two-device sync: per-device files, merging, folder watching, handling files that aren't downloaded yet | Write on iPad and see it on your Mac shortly after |
+| **M7** ✅ built | Two-device sync: per-device files merged live into the open note (ink, text, images, added/deleted pages, paper, title), the library refreshing on its own, following notes renamed/moved/deleted on the other device (no stray copies), iCloud "not downloaded yet" items downloaded on demand, conflicting copies of shared files resolved | Write on iPad and see it on your Mac shortly after |
 | **M8** | Polish: performance with 100+ page notes, faster thumbnails, settings screen, app icon | Daily-drive it |
 
 ---

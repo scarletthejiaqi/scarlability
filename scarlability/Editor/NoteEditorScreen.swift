@@ -1,4 +1,5 @@
 #if os(iOS)
+import ScarlabilityKit
 import SwiftUI
 
 /// An open note, Notability-style: the pages fill the screen, with the toolbar floating over
@@ -40,6 +41,14 @@ struct NoteEditorScreen: View {
         }
         .background(Color(.secondarySystemBackground))
         .statusBarHidden()
+        .onChange(of: document.wasDeletedElsewhere) { _, deleted in
+            guard deleted else { return }
+            model.closeDocument()
+            if case .ready(let library) = model.state {
+                library.errorTitle = "Deleted on Another Device"
+                library.errorMessage = "“\(document.note.title)” is in Recently Deleted. Restore it there to keep writing in it."
+            }
+        }
         #if DEBUG
         // `-DebugShowPages` opens the page panel; `-DebugTool pen` picks a tool.
         .onAppear {

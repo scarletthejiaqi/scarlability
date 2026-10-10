@@ -153,3 +153,56 @@ struct LibraryTests {
         #expect(abs(Double(image.height) / Double(image.width) - PageSize.a4.height / PageSize.a4.width) < 0.01)
     }
 }
+
+struct SyncTests {
+    let root = FileManager.default.temporaryDirectory.appending(path: "SyncTests-\(UUID().uuidString)")
+    let me = UUID(), other = UUID()
+    var mine: NotebookFolder { NotebookFolder(root: root, deviceID: me) }
+    var theirs: NotebookFolder { NotebookFolder(root: root, deviceID: other) }
+
+    /// Saving on this device leaves the stamp alone; another device's ink changes it.
+    @Test func noteStampOnlyChangesForOtherDevices() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try mine.createNote(title: "Shared", inSubject: nil)
+        let page = PageRecord(sortKey: 1, size: PageSize.a4, paper: .whiteLined)
+        try mine.save(page, inNoteAt: note.url)
+        let before = mine.changeStamp(inNoteAt: note.url)
+        try mine.saveOwnInk(DeviceInk(strokes: DemoInk.strokes()), page: page.id, inNoteAt: note.url)
+        #expect(mine.changeStamp(inNoteAt: note.url) == before)
+        try theirs.saveOwnInk(DeviceInk(strokes: DemoInk.strokes()), page: page.id, inNoteAt: note.url)
+        let afterInk = mine.changeStamp(inNoteAt: note.url)
+        #expect(afterInk != before)
+        // A page added on the other device changes it too.
+        try theirs.save(PageRecord(sortKey: 2, size: PageSize.a4, paper: .whiteLined), inNoteAt: note.url)
+        #expect(mine.changeStamp(inNoteAt: note.url) != afterInk)
+    }
+
+    @Test func libraryStampChangesWhenAnotherDeviceAddsANote() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let subject = try mine.createSubject(named: "Math 185", color: .black)
+        let before = mine.libraryStamp()
+        #expect(mine.libraryStamp() == before)
+        _ = try theirs.createNote(title: "From the Mac", inSubject: subject)
+        #expect(mine.libraryStamp() != before)
+    }
+
+    /// A note renamed and moved on the other device is found again by its ID.
+    @Test func findsAMovedNote() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let subject = try mine.createSubject(named: "Bio", color: .black)
+        let note = try mine.createNote(title: "Cells", inSubject: nil)
+        let renamed = try theirs.renameNote(at: note.url, to: "Cell Biology")
+        let moved = try theirs.moveNote(at: renamed, toSubject: subject)
+        #expect(mine.findNote(id: note.record.id)?.standardizedFileURL == moved.standardizedFileURL)
+        #expect(mine.findNote(id: UUID()) == nil)
+    }
+
+    /// Notes iCloud hasn't downloaded yet are counted (and their download is asked for).
+    @Test func placeholdersAreCountedAsDownloading() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data().write(to: root.appending(path: ".Lecture 4.scarnote.icloud"))
+        try Data().write(to: root.appending(path: ".photo.jpg.icloud"))
+        #expect(try mine.loadLibrary().downloading == 1)
+    }
+}
