@@ -41,6 +41,61 @@ struct StrokeSmoothingTests {
         }
     }
 
+    /// The predicted part is a guess that's thrown away next frame. If it bent the real line,
+    /// the line would visibly snap back when the guess is dropped.
+    @Test func predictionNeverMovesTheRealLine() {
+        var builder = StrokeBuilder(baseWidth: 2.2, curve: PressureCurve(), smoothing: 1.2)
+        for (location, force) in DemoInk.shakyHandwritingSamples().prefix(400) {
+            builder.add(location, force: force)
+        }
+        let real = builder.finishedPoints()
+        // A bad guess: the pen "keeps going" sharply off to the side.
+        let tip = real.last!.location
+        let wrongGuess = (1...4).map { CGPoint(x: tip.x + CGFloat($0) * 2, y: tip.y - CGFloat($0) * 6) }
+        let live = builder.livePoints(predicted: wrongGuess)
+        #expect(Array(live.prefix(real.count)) == real)
+        #expect(live.count == real.count + wrongGuess.count)
+    }
+
+    /// Points well behind the pen are final: new samples don't move them (no rubber-banding).
+    @Test func pointsBehindThePenStayPut() {
+        let samples = DemoInk.shakyHandwritingSamples()
+        var builder = StrokeBuilder(baseWidth: 2.2, curve: PressureCurve(), smoothing: 1.2)
+        var previous: [InkPoint] = []
+        for (index, (location, force)) in samples.enumerated() {
+            builder.add(location, force: force)
+            guard index.isMultiple(of: 4) else { continue }
+            let now = builder.livePoints()
+            // Everything more than ~10 points of length behind the tip must be unchanged.
+            var settled = previous.count
+            var length: CGFloat = 0
+            while settled > 1, length < 10 {
+                settled -= 1
+                length += previous[settled].location.distance(to: previous[settled - 1].location)
+            }
+            #expect(Array(now.prefix(settled)) == Array(previous.prefix(settled)))
+            previous = now
+        }
+    }
+
+    /// Smoothing as you write (a few points at a time) gives exactly the same stroke as
+    /// smoothing it all at once.
+    @Test func incrementalSmoothingMatchesAllAtOnce() {
+        let samples = DemoInk.shakyHandwritingSamples()
+        var live = StrokeBuilder(baseWidth: 2.2, curve: PressureCurve(), smoothing: 1.2)
+        var batch = live
+        for (index, (location, force)) in samples.enumerated() {
+            live.add(location, force: force)
+            if index.isMultiple(of: 3) { _ = live.livePoints() }
+            if index == 300 { live.updateForce(0.6, at: 290) }
+        }
+        for (index, (location, force)) in samples.enumerated() {
+            batch.add(location, force: force)
+            if index == 300 { batch.updateForce(0.6, at: 290) }
+        }
+        #expect(live.finishedPoints() == batch.finishedPoints())
+    }
+
     @Test func liveAndFinishedStrokesMatch() {
         var builder = StrokeBuilder(baseWidth: 2.2, curve: PressureCurve(), smoothing: 1.2)
         for (location, force) in DemoInk.shakyHandwritingSamples() {

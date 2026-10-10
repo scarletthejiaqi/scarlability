@@ -28,8 +28,7 @@ struct NoteCanvas: UIViewRepresentable {
 /// - Two-finger tap undoes, three-finger tap redoes; Apple Pencil double-tap does what the iPad's
 ///   Apple Pencil setting says.
 /// - Content is laid out in page points; zooming scales it, and the page tiles redraw sharply.
-final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegate,
-    UIEditMenuInteractionDelegate, UIPencilInteractionDelegate {
+final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegate, UIPencilInteractionDelegate {
     let document: NoteDocument
     let settings: ToolSettings
     let session: EditorSession
@@ -45,7 +44,8 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     let selectionPan = UIPanGestureRecognizer()
     /// One finger tapping with the select tool: show the menu, deselect, or offer Paste.
     let selectionTap = UITapGestureRecognizer()
-    var editMenu: UIEditMenuInteraction?
+    /// Delete, Copy, Paste, Cut… above the selection.
+    let actionBar = SelectionActionBar()
 
     var pageViews: [UUID: PageView] = [:]
     /// Which pages currently show the thin line along their bottom edge (all but the last).
@@ -263,13 +263,11 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         selectionTap.delegate = self
         scrollView.addGestureRecognizer(selectionTap)
 
-        let menu = UIEditMenuInteraction(delegate: self)
-        addInteraction(menu)
-        editMenu = menu
         let pencil = UIPencilInteraction(delegate: self)
         addInteraction(pencil)
         setUpTextEditing()
         setUpImages()
+        addSubview(actionBar)
         session.handler = { [weak self] command in self?.perform(command) }
 
         drawsWithFinger = settings.drawsWithFinger
@@ -403,11 +401,13 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         }
         showSelectionOverlay()
         layoutCropControls()
+        repositionActionBar()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         layoutTextEditor()
         layoutCropControls()
+        repositionActionBar()
         // Remember which page is in the middle of the screen, for "this page" paper changes.
         let middle = scrollView.convert(CGPoint(x: scrollView.bounds.midX, y: scrollView.bounds.midY), to: contentView)
         if let page = document.pages.first(where: { pageViews[$0.id]?.frame.minY ?? .infinity <= middle.y && middle.y < pageViews[$0.id]?.frame.maxY ?? -.infinity }) {
@@ -422,7 +422,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             endTextEditing()
             // The pinch moves the page itself from here on, including two-finger panning.
             scrollView.cancelPanning()
-            editMenu?.dismissMenu()
+            actionBar.hide()
             pinchStart = (zoomDetents.pinchPosition(forZoom: scrollView.zoomScale), pinch.location(in: contentView))
         case .changed:
             // Lifting one finger mid-pinch would make the center jump; wait for both.
@@ -632,9 +632,9 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             active.holdTimer = timer
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.holdDuration, execute: timer)
         }
+        let points = active.builder.livePoints(predicted: predicted.map(local))
         activeStroke = active
-        liveInk.showLiveStroke(active.builder.livePoints(predicted: predicted.map(local)),
-                               color: active.displayColor, tool: active.tool, pageOrigin: origin)
+        liveInk.showLiveStroke(points, color: active.displayColor, tool: active.tool, pageOrigin: origin)
     }
 
     /// The pen has held still: if the stroke looks like a shape, replace it with a clean one.
@@ -655,7 +655,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     }
 
     func finishStroke() {
-        guard let active = activeStroke else { return }
+        guard var active = activeStroke else { return }
         activeStroke = nil
         active.holdTimer?.cancel()
         var points = active.builder.finishedPoints()
@@ -669,10 +669,9 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         }
 
         let origin = active.pageView.frame.origin
-        let path = active.tool == .highlighter ? StrokeGeometry.chiselPath(for: points) : StrokeGeometry.path(for: points)
         let pieces = place(toContent(points, from: origin), tool: active.tool, color: active.color, createdAt: Date())
         let handoffID = UUID()
-        liveInk.handOff(id: handoffID, path: path, color: active.displayColor, tool: active.tool, pageOrigin: origin)
+        liveInk.handOff(id: handoffID, points: points, color: active.displayColor, tool: active.tool, pageOrigin: origin)
         document.addStroke(pieces)
         waitForTiles(handoffID, toShow: pieces)
     }
@@ -921,6 +920,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     ///   crosses from page 1 onto page 2, stays live for 3 seconds, then finishes.
     /// - `-DebugUndoAfterStroke`: undoes it 2 seconds later.
     /// - `-DebugTools`: replays a highlight, a snapped circle, then a whole-stroke erase and a lasso.
+    /// - `-DebugSelectAll`: selects everything on page 1 and shows the action bar.
     /// - `-DebugZoom 2`: zooms in first.
     func startDebugScenarioIfRequested() {
         let zoom = UserDefaults.standard.double(forKey: "DebugZoom")
@@ -928,8 +928,19 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             scrollView.zoomScale = widthFitZoom * zoom
         }
         let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-DebugSelectAll"), let page = document.pages.first {
+            settings.tool = .select
+            setSelection(strokes: page.visibleStrokes.map { .init(stroke: $0, pageID: page.id) },
+                         items: page.visibleItems.map { .init(item: $0, pageID: page.id) })
+            presentMenu()
+            return
+        }
         if arguments.contains("-DebugItems") {
             runDebugItemsScenario()
+            return
+        }
+        if arguments.contains("-DebugLongStroke") {
+            startDebugLongStroke()
             return
         }
         guard arguments.contains("-DebugLiveStroke") || arguments.contains("-DebugTools"),
@@ -954,6 +965,39 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
                                                    smoothing: StrokeSmoothing.screenRadius / scrollView.zoomScale),
                             color: tool == .pen ? .red : presets.currentColor,
                             displayColor: tool == .pen ? .red : presets.currentColor)
+    }
+
+    /// `-DebugLongStroke`: three seconds of cursive at the Pencil's 240 samples per second,
+    /// delivered 4 per frame with a (slightly wrong) prediction, like real fast writing.
+    private func startDebugLongStroke() {
+        guard let page = document.pages.first, let pageView = pageViews[page.id] else { return }
+        liveInk.rasterScale = tileRasterScale
+        activeStroke = debugStroke(tool: .pen)
+        debugStrokeOrigin = CGPoint(x: pageView.frame.minX + 50, y: pageView.frame.minY + 600)
+        CADisplayLink(target: self, selector: #selector(stepDebugLongStroke(_:))).add(to: .main, forMode: .common)
+    }
+
+    @objc private func stepDebugLongStroke(_ link: CADisplayLink) {
+        debugStep += 1
+        let samplesPerFrame = 4, total = 720
+        func location(_ i: Int) -> CGPoint {
+            let t = Double(i) / Double(total)
+            return CGPoint(x: debugStrokeOrigin.x + t * 480 + 14 * sin(t * .pi * 40),
+                           y: debugStrokeOrigin.y - 18 * cos(t * .pi * 40) + 30 * sin(t * .pi * 3))
+        }
+        let first = (debugStep - 1) * samplesPerFrame
+        guard first < total else {
+            link.invalidate()
+            finishStroke()
+            return
+        }
+        let samples = (first..<min(first + samplesPerFrame, total)).map {
+            StrokeGestureRecognizer.Sample(location: location($0), force: 0.3, estimationIndex: nil)
+        }
+        // The guess runs straight on from the last two samples, overshooting curves.
+        let a = location(first + samplesPerFrame - 2), b = location(first + samplesPerFrame - 1)
+        let predicted = (1...3).map { CGPoint(x: b.x + (b.x - a.x) * CGFloat($0) * 2, y: b.y + (b.y - a.y) * CGFloat($0) * 2) }
+        add(samples, forceUpdates: [], predicted: predicted)
     }
 
     @objc private func stepDebugScenario(_ link: CADisplayLink) {

@@ -10,7 +10,14 @@ let package = Package(
         .library(name: "ScarlabilityKit", targets: ["ScarlabilityKit"]),
     ],
     targets: [
-        .target(name: "ScarlabilityKit"),
+        .target(
+            name: "ScarlabilityKit",
+            swiftSettings: [
+                // Writing feels laggy if stroke smoothing and drawing run unoptimized, and running
+                // from Xcode uses the Debug configuration, so optimize this package even there.
+                .unsafeFlags(["-O"], .when(configuration: .debug)),
+            ]
+        ),
         .testTarget(name: "ScarlabilityKitTests", dependencies: ["ScarlabilityKit"]),
     ]
 )

@@ -11,6 +11,31 @@ public enum StrokeGeometry {
     static let maxSegmentLength: CGFloat = 1
     static let maxSubdivisions = 32
 
+    /// The outline of just the parts of the stroke that come near `rect` (page coordinates). The
+    /// live stroke uses this to redraw only the small area where the pen is.
+    public static func path(for points: [InkPoint], near rect: CGRect) -> CGPath {
+        let path = CGMutablePath()
+        let margin = CGFloat(points.map(\.width).max() ?? 0) / 2 + 2
+        let area = rect.insetBy(dx: -margin, dy: -margin)
+        // Each stretch of the stroke inside the area, plus two points either side, so the
+        // spline (which looks at neighbors) curves exactly as it does for the whole stroke.
+        var index = 0
+        while index < points.count {
+            guard area.contains(points[index].location) else {
+                index += 1
+                continue
+            }
+            var end = index
+            while end + 1 < points.count, area.contains(points[end + 1].location) {
+                end += 1
+            }
+            let lower = max(0, index - 2), upper = min(points.count - 1, end + 2)
+            path.addPath(self.path(for: Array(points[lower...upper])))
+            index = end + 1
+        }
+        return path
+    }
+
     public static func path(for points: [InkPoint]) -> CGPath {
         let path = CGMutablePath()
         let dense = interpolate(points)

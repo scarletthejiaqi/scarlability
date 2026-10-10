@@ -84,6 +84,24 @@ struct StrokeGeometryTests {
         }
     }
 
+    /// Drawing just the area near the pen must cover the same pixels there as the whole stroke.
+    @Test func partialPathMatchesTheWholeStrokeInsideItsArea() {
+        var builder = StrokeBuilder(baseWidth: 3, curve: PressureCurve(), smoothing: 1.2)
+        for (location, force) in DemoInk.shakyHandwritingSamples(origin: CGPoint(x: 20, y: 40)) {
+            builder.add(location, force: force)
+        }
+        let points = builder.finishedPoints()
+        let whole = StrokeGeometry.path(for: points)
+        let tile = CGRect(x: 60, y: 30, width: 50, height: 40)
+        let part = StrokeGeometry.path(for: points, near: tile)
+        for x in stride(from: tile.minX + 0.5, to: tile.maxX, by: 1) {
+            for y in stride(from: tile.minY + 0.5, to: tile.maxY, by: 1) {
+                let point = CGPoint(x: x, y: y)
+                #expect(whole.contains(point, using: .winding) == part.contains(point, using: .winding), "differs at \(point)")
+            }
+        }
+    }
+
     @Test func pathCoversTheStroke() {
         let stroke = Stroke(color: .black, points: [InkPoint(x: 10, y: 10, width: 4), InkPoint(x: 60, y: 30, width: 6)])
         let pathBounds = StrokeGeometry.path(for: stroke.points).boundingBoxOfPath

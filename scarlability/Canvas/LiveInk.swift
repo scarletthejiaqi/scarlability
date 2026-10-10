@@ -36,9 +36,9 @@ final class LiveInk {
     var highlighterHosts: (CGRect) -> [HighlighterHost] = { _ in [] }
 
     private let host: CALayer
-    private let livePen = StrokeInkLayer()
+    private var livePen = LiveStrokeTiles()
     private var liveHighlights: [StrokeInkLayer] = []
-    private var handoffs: [UUID: [StrokeInkLayer]] = [:]
+    private var handoffs: [UUID: [CALayer]] = [:]
     private let preview = StrokeInkLayer()
     private let eraser = CAShapeLayer()
     private let lasso = CAShapeLayer()
@@ -51,9 +51,8 @@ final class LiveInk {
 
     init(host: CALayer) {
         self.host = host
-        for layer in [livePen, preview] {
-            host.addSublayer(layer)
-        }
+        host.addSublayer(livePen)
+        host.addSublayer(preview)
         let tint = UIColor.systemBlue.cgColor
         eraser.fillColor = UIColor.white.withAlphaComponent(0.4).cgColor
         eraser.strokeColor = UIColor.gray.cgColor
@@ -74,33 +73,33 @@ final class LiveInk {
     // MARK: - Strokes
 
     func showLiveStroke(_ points: [InkPoint], color: InkColor, tool: InkTool, pageOrigin: CGPoint) {
-        let path = tool == .highlighter ? StrokeGeometry.chiselPath(for: points) : StrokeGeometry.path(for: points)
-        let item = Item(path: path, color: color.cgColor, tool: tool, pageOrigin: pageOrigin)
         if tool == .highlighter {
+            let item = Item(path: StrokeGeometry.chiselPath(for: points), color: color.cgColor, tool: tool, pageOrigin: pageOrigin)
             liveHighlights = placeHighlight(item, reusing: liveHighlights, growing: true)
         } else {
-            livePen.configure(writingArea: writingArea, rasterScale: rasterScale, hostOrigin: .zero)
-            livePen.show([item], growing: true)
+            livePen.show(points, color: color.cgColor, pageOrigin: pageOrigin, writingArea: writingArea, rasterScale: rasterScale)
         }
     }
 
     func clearLiveStroke() {
-        livePen.clear()
+        livePen.reset()
         liveHighlights.forEach { $0.removeFromSuperlayer() }
         liveHighlights = []
     }
 
     /// Replaces the live stroke with its finished shape, shown until `endHandOff(id)`.
-    func handOff(id: UUID, path: CGPath, color: InkColor, tool: InkTool, pageOrigin: CGPoint) {
-        let item = Item(path: path, color: color.cgColor, tool: tool, pageOrigin: pageOrigin)
+    ///
+    /// For the pen, the live stroke's own tiles become the finished copy (just redrawn without
+    /// the prediction), so nothing has to be rebuilt the moment the pen lifts.
+    func handOff(id: UUID, points: [InkPoint], color: InkColor, tool: InkTool, pageOrigin: CGPoint) {
         if tool == .highlighter {
+            let item = Item(path: StrokeGeometry.chiselPath(for: points), color: color.cgColor, tool: tool, pageOrigin: pageOrigin)
             handoffs[id] = placeHighlight(item, reusing: [], growing: false)
         } else {
-            let layer = StrokeInkLayer()
-            layer.configure(writingArea: writingArea, rasterScale: rasterScale, hostOrigin: .zero)
-            layer.show([item], growing: false)
-            host.addSublayer(layer)
-            handoffs[id] = [layer]
+            livePen.show(points, color: color.cgColor, pageOrigin: pageOrigin, writingArea: writingArea, rasterScale: rasterScale)
+            handoffs[id] = [livePen]
+            livePen = LiveStrokeTiles()
+            host.addSublayer(livePen)
         }
         clearLiveStroke()
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.handoffTimeout) { [weak self] in
@@ -197,6 +196,117 @@ final class LiveInk {
     func hideSelection() {
         selection.isHidden = true
         selectionHandles.isHidden = true
+    }
+}
+
+/// The pen stroke being written, drawn in small tiles so each frame only redraws the tile or two
+/// where the pen is, however long the stroke gets.
+private final class LiveStrokeTiles: CALayer {
+    private struct TileKey: Hashable {
+        var column: Int
+        var row: Int
+    }
+
+    private var points: [InkPoint] = []
+    private var color: CGColor = CGColor(gray: 0, alpha: 1)
+    /// In content coordinates; the tile grid is anchored here, like that page's tiles.
+    private var pageOrigin: CGPoint = .zero
+    private var writingArea: CGRect = .infinite
+    private var rasterScale: CGFloat = 2
+    private var tiles: [TileKey: Tile] = [:]
+
+    /// Tiles are this many pixels square.
+    private static let tilePixels: CGFloat = 256
+
+    override init() {
+        super.init()
+        zPosition = 10
+    }
+
+    override init(layer: Any) {
+        super.init(layer: layer)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override func action(forKey event: String) -> CAAction? { NSNull() }
+
+    private var tileSize: CGFloat { Self.tilePixels / rasterScale }
+
+    func show(_ newPoints: [InkPoint], color: CGColor, pageOrigin: CGPoint, writingArea: CGRect, rasterScale: CGFloat) {
+        if points.isEmpty {
+            self.pageOrigin = pageOrigin
+            self.writingArea = writingArea
+            self.rasterScale = rasterScale
+        }
+        self.color = color
+        // Only the end of the stroke changes from frame to frame: find where.
+        let common = min(points.count, newPoints.count)
+        var first = max(0, common - 200)
+        while first < common, points[first] == newPoints[first] {
+            first += 1
+        }
+        let start = max(0, first - 3)
+        var dirty = CGRect.null
+        for point in points.dropFirst(start) + newPoints.dropFirst(start) {
+            let r = CGFloat(point.width) / 2 + 2
+            dirty = dirty.union(CGRect(x: CGFloat(point.x) - r, y: CGFloat(point.y) - r, width: 2 * r, height: 2 * r))
+        }
+        points = newPoints
+        guard !dirty.isNull else { return }
+        redrawTiles(in: dirty.offsetBy(dx: pageOrigin.x, dy: pageOrigin.y).intersection(writingArea))
+    }
+
+    func reset() {
+        points = []
+        tiles.values.forEach { $0.removeFromSuperlayer() }
+        tiles = [:]
+    }
+
+    /// Redraws (creating if needed) the tiles covering a rect in content coordinates.
+    private func redrawTiles(in rect: CGRect) {
+        guard !rect.isNull, !rect.isEmpty else { return }
+        let size = tileSize
+        let columns = Int(floor((rect.minX - pageOrigin.x) / size))...Int(floor((rect.maxX - pageOrigin.x) / size))
+        let rows = Int(floor((rect.minY - pageOrigin.y) / size))...Int(floor((rect.maxY - pageOrigin.y) / size))
+        for column in columns {
+            for row in rows {
+                let key = TileKey(column: column, row: row)
+                let tile = tiles[key] ?? {
+                    let tile = Tile()
+                    tile.owner = self
+                    tile.contentsScale = rasterScale
+                    tile.frame = CGRect(x: pageOrigin.x + CGFloat(column) * size, y: pageOrigin.y + CGFloat(row) * size, width: size, height: size)
+                    addSublayer(tile)
+                    tiles[key] = tile
+                    return tile
+                }()
+                tile.setNeedsDisplay()
+            }
+        }
+    }
+
+    fileprivate func draw(_ tile: Tile, in context: CGContext) {
+        // Work in content coordinates, then in the stroke's page coordinates.
+        context.translateBy(x: -tile.frame.minX, y: -tile.frame.minY)
+        context.clip(to: writingArea.intersection(tile.frame))
+        context.translateBy(x: pageOrigin.x, y: pageOrigin.y)
+        let area = tile.frame.offsetBy(dx: -pageOrigin.x, dy: -pageOrigin.y)
+        context.setFillColor(color)
+        context.addPath(StrokeGeometry.path(for: points, near: area))
+        context.fillPath(using: .winding)
+    }
+
+    fileprivate final class Tile: CALayer {
+        weak var owner: LiveStrokeTiles?
+
+        override func action(forKey event: String) -> CAAction? { NSNull() }
+
+        override func draw(in context: CGContext) {
+            owner?.draw(self, in: context)
+        }
     }
 }
 
