@@ -17,8 +17,7 @@ struct EditorToolbar: View {
 
     @State private var leftWidth: CGFloat = 0
     @State private var rightWidth: CGFloat = 0
-    @State private var renaming = false
-    @State private var renameText = ""
+    @State private var renamingFromTitle = false
 
     var body: some View {
         let side = max(leftWidth, rightWidth)
@@ -41,16 +40,6 @@ struct EditorToolbar: View {
             }
         }
         .padding(.horizontal, 12)
-        .alert("Rename Note", isPresented: $renaming) {
-            TextField("Title", text: $renameText)
-            Button("Rename") { document.rename(to: renameText) }
-            Button("Cancel", role: .cancel) {}
-        }
-    }
-
-    private func startRenaming() {
-        renameText = document.note.title
-        renaming = true
     }
 
     private var leading: some View {
@@ -78,15 +67,14 @@ struct EditorToolbar: View {
     }
 
     private var trailing: some View {
-        NoteActions(document: document, settings: settings, session: session, model: model, showsPages: $showsPages,
-                    onRename: startRenaming)
+        NoteActions(document: document, settings: settings, session: session, model: model, showsPages: $showsPages)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rightWidth = $0 }
     }
 
     /// The note's name (tap to rename it) above the tool palette.
     private var palette: some View {
         VStack(spacing: 6) {
-            Button(action: startRenaming) {
+            Button { renamingFromTitle = true } label: {
                 Text(document.note.title)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.primary)
@@ -99,6 +87,13 @@ struct EditorToolbar: View {
             }
             .buttonStyle(.plain)
             .accessibilityHint("Rename the note")
+            // Right under the name, not in the middle of the screen.
+            .popover(isPresented: $renamingFromTitle, arrowEdge: .top) {
+                RenameField(title: "Rename Note", text: document.note.title) { title in
+                    document.rename(to: title)
+                    renamingFromTitle = false
+                }
+            }
             ToolPalette(settings: settings, session: session)
         }
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { bottom = $0 }
@@ -122,11 +117,11 @@ private struct NoteActions: View {
     let session: EditorSession
     let model: AppModel
     @Binding var showsPages: Bool
-    let onRename: () -> Void
 
-    @State private var showsSettings = false
-    @State private var showsPaper = false
-    @State private var exporting = false
+    @State private var showsMenu = false
+    @State private var menuPath: [NoteMenuPage] = []
+    /// Where the ⋯ button is on screen, for pointing the Share menu at it.
+    @State private var menuFrame: CGRect = .zero
 
     var body: some View {
         HStack(spacing: 4) {
@@ -134,30 +129,16 @@ private struct NoteActions: View {
                 .disabled(!document.canUndo)
             iconButton("arrow.uturn.forward", label: "Redo", action: document.redo)
                 .disabled(!document.canRedo)
-            Menu {
-                Button("Rename Note", systemImage: "pencil", action: onRename)
-                Button("Paper", systemImage: "doc.richtext") { showsPaper = true }
-                Button("Export as PDF…", systemImage: "square.and.arrow.up") { exporting = true }
-                Button("Settings", systemImage: "gearshape") { showsSettings = true }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-                    .font(.system(size: 21))
-                    .frame(width: 44, height: 44)
+            iconButton("ellipsis.circle", label: "More", isOn: showsMenu) {
+                menuPath = []
+                showsMenu = true
             }
-            .accessibilityLabel("More")
-            .popover(isPresented: $showsPaper) {
-                PaperSettingsView(document: document)
-            }
-            .sheet(isPresented: $exporting) {
-                if let folder = model.notesFolder {
-                    ExportSheet(source: .document(document, currentPage: session.visiblePageID.flatMap { document.pageIndex($0) }),
-                                folder: folder)
-                }
-            }
-            .popover(isPresented: $showsSettings) {
-                EditorSettingsView(settings: settings, folderName: model.folderName) {
-                    showsSettings = false
-                    model.forgetFolder()
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { menuFrame = $0 }
+            // Everything opens right under the ⋯ button, inside this one panel.
+            .popover(isPresented: $showsMenu, arrowEdge: .top) {
+                NoteMenuPanel(document: document, settings: settings, session: session, model: model, path: $menuPath,
+                              shareSource: menuFrame) {
+                    showsMenu = false
                 }
             }
             iconButton("rectangle.portrait.on.rectangle.portrait", label: "Pages", isOn: showsPages) {
@@ -169,11 +150,17 @@ private struct NoteActions: View {
         .frame(height: 52)
         .floatingCard(cornerRadius: 14)
         #if DEBUG
-        // `-DebugShowSettings` / `-DebugShowPaper` / `-DebugShowExport` open those.
+        // `-DebugShowMenu` opens the ⋯ panel; `-DebugShowSettings` / `-DebugShowPaper` /
+        // `-DebugShowExport` open it at that page.
         .onAppear {
-            showsSettings = ProcessInfo.processInfo.arguments.contains("-DebugShowSettings")
-            showsPaper = ProcessInfo.processInfo.arguments.contains("-DebugShowPaper")
-            exporting = ProcessInfo.processInfo.arguments.contains("-DebugShowExport")
+            let arguments = ProcessInfo.processInfo.arguments
+            let pages: [(String, NoteMenuPage)] = [("-DebugShowSettings", .settings), ("-DebugShowPaper", .paper), ("-DebugShowExport", .export)]
+            if let page = pages.first(where: { arguments.contains($0.0) })?.1 {
+                menuPath = [page]
+                showsMenu = true
+            } else if arguments.contains("-DebugShowMenu") {
+                showsMenu = true
+            }
         }
         #endif
     }
@@ -188,6 +175,118 @@ private struct NoteActions: View {
         .buttonStyle(.plain)
         .accessibilityLabel(label)
         .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+}
+
+/// The pages inside the ⋯ panel.
+enum NoteMenuPage: Hashable {
+    case rename
+    case paper
+    case export
+    case settings
+}
+
+/// The ⋯ panel, right under its button: Rename, Paper, Export as PDF and Settings, each opening
+/// inside the panel (nothing pops up in the middle of the screen).
+private struct NoteMenuPanel: View {
+    let document: NoteDocument
+    @Bindable var settings: ToolSettings
+    let session: EditorSession
+    let model: AppModel
+    @Binding var path: [NoteMenuPage]
+    let shareSource: CGRect
+    let close: () -> Void
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            List {
+                NavigationLink(value: NoteMenuPage.rename) { Label("Rename Note", systemImage: "pencil") }
+                NavigationLink(value: NoteMenuPage.paper) { Label("Paper", systemImage: "doc.richtext") }
+                NavigationLink(value: NoteMenuPage.export) { Label("Export as PDF", systemImage: "square.and.arrow.up") }
+                NavigationLink(value: NoteMenuPage.settings) { Label("Settings", systemImage: "gearshape") }
+            }
+            .navigationTitle(document.note.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: NoteMenuPage.self) { page in
+                switch page {
+                case .rename:
+                    RenameField(title: "Rename Note", text: document.note.title) { title in
+                        document.rename(to: title)
+                        close()
+                    }
+                    .frame(maxHeight: .infinity, alignment: .top)
+                case .paper:
+                    PaperSettingsView(document: document)
+                        .navigationTitle("Paper")
+                case .export:
+                    if let folder = model.notesFolder {
+                        ExportOptionsView(source: .document(document, currentPage: session.visiblePageID.flatMap { document.pageIndex($0) }),
+                                          folder: folder, shareSource: shareSource, onExported: close)
+                    }
+                case .settings:
+                    EditorSettingsView(settings: settings, folderName: model.folderName) {
+                        close()
+                        model.forgetFolder()
+                    }
+                    .navigationTitle("Settings")
+                }
+            }
+        }
+        // Each page's own height, so the short menu isn't a tall empty panel.
+        .frame(width: 400, height: height)
+        .presentationCompactAdaptation(.popover)
+    }
+
+    private var height: CGFloat {
+        switch path.last {
+        case nil: 290
+        case .rename?: 220
+        case .export?: 380
+        case .paper?: 440
+        case .settings?: 680
+        }
+    }
+}
+
+/// A name to change, right under what was tapped: the field is ready to type in.
+struct RenameField: View {
+    let title: String
+    @State private var text: String
+    let onRename: (String) -> Void
+    @FocusState private var isFocused: Bool
+
+    init(title: String, text: String, onRename: @escaping (String) -> Void) {
+        self.title = title
+        _text = State(initialValue: text)
+        self.onRename = onRename
+    }
+
+    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.headline)
+            TextField("Name", text: $text)
+                .textFieldStyle(.roundedBorder)
+                .focused($isFocused)
+                .submitLabel(.done)
+                .onSubmit(rename)
+            HStack {
+                Spacer()
+                Button("Rename", action: rename)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(trimmed.isEmpty)
+            }
+        }
+        .padding(16)
+        .frame(width: 340)
+        .onAppear { isFocused = true }
+        .presentationCompactAdaptation(.popover)
+    }
+
+    private func rename() {
+        guard !trimmed.isEmpty else { return }
+        onRename(trimmed)
     }
 }
 
@@ -719,8 +818,6 @@ private struct PaperSettingsView: View {
                 Text(appliesToWholeNote ? "All pages change, and new pages use this paper." : "Only the page in the middle of the screen changes.")
             }
         }
-        .frame(width: 380, height: 420)
-        .presentationCompactAdaptation(.popover)
         .onAppear {
             let page = document.pages.first { $0.id == document.visiblePageID } ?? document.pages.first
             paper = page?.record.paper ?? document.note.defaultPaper
@@ -799,8 +896,6 @@ struct EditorSettingsView: View {
                 }
             }
         }
-        .frame(width: 400, height: 680)
-        .presentationCompactAdaptation(.popover)
     }
 }
 

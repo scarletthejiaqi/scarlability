@@ -138,7 +138,8 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 
 ## 13b. Note screen and smoother writing (M4.5)
 - [ ] **Look:** the page fills the screen. Floating on top: **←** (left), the note's name with the tool palette under it (middle: pen, highlighter, eraser, Aa text, lasso, ⊕ insert, ✋ finger drawing, with the current tool's colors and sizes below), and **undo, redo, ⋯, pages** (right). No status bar.
-- [ ] **⋯** has **Rename Note, Paper, Settings**.
+- [ ] **⋯** opens a panel **right under the button** (nothing pops up in the middle of the screen) with **Rename Note, Paper, Export as PDF, Settings**. Each opens inside the same panel; **‹** goes back.
+- [ ] Everywhere else too: whatever a button or long-press opens appears **at that button or item**: the rename field under the note's name, a note's Rename / Move / Export at its card, New Folder under **+**, delete questions at the folder, page or note.
 - [ ] **Page number** at the bottom right ("2 / 5"). The ⌃ and ⌄ arrows jump to the page above and below.
 - [ ] **Page panel:** tap the pages button (top right, two rectangles). Thumbnails of every page appear on the right and the page shrinks to fit next to them, **without flashing**. Close and reopen it: the thumbnails are there right away. The current page has a blue border. Tap a thumbnail to jump there. Write something; its thumbnail updates a moment later.
 - [ ] In the panel, the dashed **+** adds a blank page at the end and jumps to it.
@@ -241,6 +242,20 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 37. **Highlighter:** right yellow now? It's also a bit stronger (50% see-through instead of 38%). Too strong?
 38. **Angle lock:** lines lock within 5° of flat or upright. Too sticky or not sticky enough? Should 45° lock too?
 
+**Choices I made for M5–M7 (you said to build like Notability without asking; change any of these):**
+39. **Snap to Text** starts **off** (normal highlighter); turn it on in the highlighter's row. It highlights exactly from where you start to where you are (like selecting text), not whole words. Want whole words, or on by default for PDFs?
+40. **Highlights darken what's under them** (text stays black, like a real highlighter). OK, or do you want them to cover the text?
+41. **Imported PDF pages** keep the PDF's size; no blank page gets added after the last PDF page. Imported notes are named after the file and go into the folder you're viewing (or Unfiled).
+42. **Inserting a PDF into a note** puts its pages right after the page on screen. Or at the end?
+43. **Export:** "Include Paper" is on by default. Several notes as one PDF go in the library's order (your sort), with no title page between notes. Want a title page per note?
+44. **Mac look:** the Mac app is the iPad app scaled to the Mac window ("Scale to match iPad"), so it looks exactly like the iPad. The other option is Mac-style controls (sharper, more Mac-like, slightly different look).
+45. **Mac drawing:** the mouse/trackpad always draws; scroll with two fingers or the wheel. Mouse lines are smoothed a bit more (1.6). OK?
+46. **Mac shortcuts:** ⌘1–⌘5 tools, ⌘N new note, ⇧⌘I import PDF, ⌘[ back to library, ⌘= / ⌘- / ⌘0 zoom, ⌫ delete, ⌘D duplicate, Esc deselect. Any you want different?
+47. **Sync timing:** an open note checks for the other device's changes every 3 s, the library every 5 s (the actual delay is mostly iCloud's). OK?
+48. **Deleted on the other device while open:** the note closes with a message (it's in Recently Deleted). Or keep it open?
+49. **Both devices change the same shared thing** (e.g. rename the same note at once): the newest change wins. A page deleted on one device stays deleted.
+50. **Everything opens under its button** (your request). Delete questions appear at the item. Anything that should still be a full-screen window?
+
 ---
 
-*New sections are added here as each part is built (next: M5, PDF import and export).*
+*All milestones through M7 are built. Next: M8 (polish: speed with 100+ page notes, faster thumbnails, app icon), when you're ready.*

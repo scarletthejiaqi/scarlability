@@ -53,12 +53,6 @@ struct PagePanel: View {
         .overlay(alignment: .leading) {
             Rectangle().fill(Color(.separator)).frame(width: 0.5)
         }
-        .confirmationDialog("Delete this page?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-                            titleVisibility: .visible, presenting: deleting) { id in
-            Button("Delete Page", role: .destructive) { document.deletePage(id) }
-        } message: { _ in
-            Text("Everything on it is deleted. This can't be undone.")
-        }
     }
 
     static let thumbnailWidth: CGFloat = 120
@@ -95,6 +89,13 @@ struct PagePanel: View {
         .buttonStyle(.plain)
         .contextMenu {
             Button("Delete Page", systemImage: "trash", role: .destructive) { deleting = page.id }
+        }
+        // Asked at the page's own thumbnail.
+        .confirmationDialog("Delete page \(number)?", isPresented: Binding(get: { deleting == page.id }, set: { if !$0 { deleting = nil } }),
+                            titleVisibility: .visible) {
+            Button("Delete Page", role: .destructive) { document.deletePage(page.id) }
+        } message: {
+            Text("Everything on it is deleted. This can't be undone.")
         }
         .accessibilityLabel("Page \(number)")
         .task(id: page.revision) {

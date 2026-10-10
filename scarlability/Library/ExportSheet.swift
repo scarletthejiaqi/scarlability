@@ -5,7 +5,8 @@ import UIKit
 
 /// "Export as PDF": which pages (for one open note), with or without the paper, and for several
 /// notes, one combined PDF or one each. Then the Share menu (AirDrop, Save to Files, Mail…).
-struct ExportSheet: View {
+/// Shown inside a popover under what was tapped (the ⋯ panel, a note, the Export button).
+struct ExportOptionsView: View {
     enum Source {
         /// The open note; "This page" means the page in the middle of the screen.
         case document(NoteDocument, currentPage: Int?)
@@ -20,7 +21,10 @@ struct ExportSheet: View {
 
     let source: Source
     let folder: NotebookFolder
-    @Environment(\.dismiss) private var dismiss
+    /// Where on screen the Share menu should point (the button that opened this).
+    var shareSource: CGRect = .zero
+    /// Called once the PDF is made, to close the popover before the Share menu opens.
+    let onExported: () -> Void
 
     @State private var pageChoice = PageChoice.all
     @State private var customPages = ""
@@ -30,64 +34,62 @@ struct ExportSheet: View {
     @State private var failure: String?
 
     var body: some View {
-        NavigationStack {
-            Form {
-                if case .document(let document, let current) = source {
-                    Section("Pages") {
-                        Picker("Pages", selection: $pageChoice) {
-                            Text("All").tag(PageChoice.all)
-                            if current != nil { Text("This Page").tag(PageChoice.current) }
-                            Text("Custom").tag(PageChoice.custom)
-                        }
-                        .pickerStyle(.segmented)
-                        if pageChoice == .custom {
-                            TextField("e.g. 1-3, 5", text: $customPages)
-                                .keyboardType(.numbersAndPunctuation)
-                            if !customPages.isEmpty, PageRange.parse(customPages, pageCount: document.pages.count) == nil {
-                                Text("Use page numbers from 1 to \(document.pages.count), like 1-3, 5.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.red)
-                            }
+        Form {
+            if case .document(let document, let current) = source {
+                Section("Pages") {
+                    Picker("Pages", selection: $pageChoice) {
+                        Text("All").tag(PageChoice.all)
+                        if current != nil { Text("This Page").tag(PageChoice.current) }
+                        Text("Custom").tag(PageChoice.custom)
+                    }
+                    .pickerStyle(.segmented)
+                    if pageChoice == .custom {
+                        TextField("e.g. 1-3, 5", text: $customPages)
+                            .keyboardType(.numbersAndPunctuation)
+                        if !customPages.isEmpty, PageRange.parse(customPages, pageCount: document.pages.count) == nil {
+                            Text("Use page numbers from 1 to \(document.pages.count), like 1-3, 5.")
+                                .font(.footnote)
+                                .foregroundStyle(.red)
                         }
                     }
-                }
-                if case .notes(let notes) = source, notes.count > 1 {
-                    Section {
-                        Picker("Files", selection: $combined) {
-                            Text("One PDF").tag(true)
-                            Text("A PDF per Note").tag(false)
-                        }
-                        .pickerStyle(.segmented)
-                    } footer: {
-                        Text(combined ? "The notes go one after another, in the order shown in the library." : "Each note becomes its own PDF.")
-                    }
-                }
-                Section {
-                    Toggle("Include Paper", isOn: $includePaper)
-                } footer: {
-                    Text(includePaper ? "Lines and paper color are included." : "Pages are plain white, without lines.")
-                }
-                if let failure {
-                    Text(failure).foregroundStyle(.red)
                 }
             }
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    if isExporting {
-                        ProgressView()
-                    } else {
-                        Button("Export") { export() }
-                            .bold()
-                            .disabled(!canExport)
+            if case .notes(let notes) = source, notes.count > 1 {
+                Section {
+                    Picker("Files", selection: $combined) {
+                        Text("One PDF").tag(true)
+                        Text("A PDF per Note").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                } footer: {
+                    Text(combined ? "The notes go one after another, in the order shown in the library." : "Each note becomes its own PDF.")
+                }
+            }
+            Section {
+                Toggle("Include Paper", isOn: $includePaper)
+            } footer: {
+                Text(includePaper ? "Lines and paper color are included." : "Pages are plain white, without lines.")
+            }
+            if let failure {
+                Text(failure).foregroundStyle(.red)
+            }
+            Section {
+                Button(action: export) {
+                    HStack {
+                        Spacer()
+                        if isExporting {
+                            ProgressView()
+                        } else {
+                            Label("Export", systemImage: "square.and.arrow.up").bold()
+                        }
+                        Spacer()
                     }
                 }
+                .disabled(!canExport || isExporting)
             }
         }
-        .frame(minWidth: 360, minHeight: 320)
-        .presentationDetents([.medium])
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var title: String {
@@ -128,10 +130,10 @@ struct ExportSheet: View {
                     }
                 }
                 isExporting = false
-                dismiss()
-                // After the sheet is gone, so the Share menu has somewhere to appear.
+                onExported()
+                // After the popover is gone, so the Share menu has somewhere to appear.
                 try? await Task.sleep(for: .milliseconds(450))
-                SharePresenter.share(urls)
+                SharePresenter.share(urls, from: shareSource)
             } catch {
                 isExporting = false
                 failure = "Couldn't make the PDF: \(error.localizedDescription)"
@@ -140,9 +142,9 @@ struct ExportSheet: View {
     }
 }
 
-/// Shows the system Share menu for files.
+/// Shows the system Share menu for files, pointing at `rect` (window coordinates).
 enum SharePresenter {
-    static func share(_ urls: [URL]) {
+    static func share(_ urls: [URL], from rect: CGRect = .zero) {
         let window = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first(where: \.isKeyWindow)
         guard let window, var presenter = window.rootViewController else { return }
         while let presented = presenter.presentedViewController {
@@ -150,8 +152,12 @@ enum SharePresenter {
         }
         let activity = UIActivityViewController(activityItems: urls, applicationActivities: nil)
         activity.popoverPresentationController?.sourceView = window
-        activity.popoverPresentationController?.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.midY, width: 1, height: 1)
-        activity.popoverPresentationController?.permittedArrowDirections = []
+        if rect.isEmpty {
+            activity.popoverPresentationController?.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.midY, width: 1, height: 1)
+            activity.popoverPresentationController?.permittedArrowDirections = []
+        } else {
+            activity.popoverPresentationController?.sourceRect = rect
+        }
         presenter.present(activity, animated: true)
     }
 }

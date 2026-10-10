@@ -54,7 +54,6 @@ private struct LibrarySidebar: View {
     @State private var showsSettings = false
     @State private var creating: NewFolderKind?
     @State private var renaming: FolderTarget?
-    @State private var renameText = ""
     @State private var deleting: FolderTarget?
 
     private enum FolderTarget: Identifiable {
@@ -124,6 +123,8 @@ private struct LibrarySidebar: View {
                         showsSettings = false
                         model.forgetFolder()
                     }
+                    .frame(width: 400, height: 680)
+                    .presentationCompactAdaptation(.popover)
                 }
                 .padding(.bottom, 14)
 
@@ -158,6 +159,9 @@ private struct LibrarySidebar: View {
                     }
                     .tint(.primary)
                     .accessibilityLabel("New Folder")
+                    .popover(item: $creating, arrowEdge: .bottom) { kind in
+                        NewFolderSheet(library: library, kind: kind)
+                    }
                 }
                 .padding(.leading, 12)
                 .padding(.top, 22)
@@ -205,42 +209,40 @@ private struct LibrarySidebar: View {
             .padding(.bottom, 24)
         }
         .background(Color(.secondarySystemBackground).opacity(0.6))
-        .sheet(item: $creating) { kind in
-            NewFolderSheet(library: library, kind: kind)
-        }
-        .alert("Rename", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }), presenting: renaming) { target in
-            TextField("Name", text: $renameText)
-            Button("Rename") {
-                let name = renameText.trimmingCharacters(in: .whitespaces)
-                guard !name.isEmpty else { return }
-                Task {
-                    switch target {
-                    case .subject(let subject): await library.renameFolder(subject.id, to: name)
-                    case .divider(let divider): await library.renameDivider(divider.id, to: name)
+    }
+
+    /// Rename and delete open at the folder's own row, not in the middle of the screen.
+    private func folderActions(_ target: FolderTarget, on row: some View) -> some View {
+        row
+            .popover(isPresented: Binding(get: { renaming?.id == target.id }, set: { if !$0 { renaming = nil } }), arrowEdge: .trailing) {
+                RenameField(title: "Rename Folder", text: target.name) { name in
+                    renaming = nil
+                    Task {
+                        switch target {
+                        case .subject(let subject): await library.renameFolder(subject.id, to: name)
+                        case .divider(let divider): await library.renameDivider(divider.id, to: name)
+                        }
                     }
                 }
             }
-            Button("Cancel", role: .cancel) {}
-        }
-        .confirmationDialog(
-            "Delete “\(deleting?.name ?? "")”?",
-            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-            titleVisibility: .visible,
-            presenting: deleting
-        ) { target in
-            Button("Delete", role: .destructive) {
-                Task {
-                    switch target {
-                    case .subject(let subject): await library.deleteSubject(subject.id)
-                    case .divider(let divider): await library.deleteDivider(divider.id)
+            .confirmationDialog(
+                "Delete “\(target.name)”?",
+                isPresented: Binding(get: { deleting?.id == target.id }, set: { if !$0 { deleting = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    Task {
+                        switch target {
+                        case .subject(let subject): await library.deleteSubject(subject.id)
+                        case .divider(let divider): await library.deleteDivider(divider.id)
+                        }
                     }
                 }
+            } message: {
+                Text(target.noteCount == 0
+                     ? "It's empty."
+                     : "Its \(target.noteCount) note\(target.noteCount == 1 ? "" : "s") will go to Recently Deleted for 30 days.")
             }
-        } message: { target in
-            Text(target.noteCount == 0
-                 ? "It's empty."
-                 : "Its \(target.noteCount) note\(target.noteCount == 1 ? "" : "s") will go to Recently Deleted for 30 days.")
-        }
     }
 
     /// A sidebar row: gray behind it when selected.
@@ -260,6 +262,10 @@ private struct LibrarySidebar: View {
     }
 
     private func subjectRow(_ subject: NotebookFolder.Subject, indent: CGFloat) -> some View {
+        folderActions(.subject(subject), on: subjectRowContent(subject, indent: indent))
+    }
+
+    private func subjectRowContent(_ subject: NotebookFolder.Subject, indent: CGFloat) -> some View {
         row(isSelected: library.section == .subject(subject.id) && !library.isSearching) {
             library.searchText = ""
             library.section = .subject(subject.id)
@@ -284,6 +290,10 @@ private struct LibrarySidebar: View {
     }
 
     private func dividerRow(_ divider: NotebookFolder.Divider) -> some View {
+        folderActions(.divider(divider), on: dividerRowContent(divider))
+    }
+
+    private func dividerRowContent(_ divider: NotebookFolder.Divider) -> some View {
         let isExpanded = !library.collapsedDividers.contains(divider.id)
         return row(isSelected: false) {
             withAnimation(.snappy(duration: 0.2)) {
@@ -321,7 +331,6 @@ private struct LibrarySidebar: View {
     }
 
     private func startRenaming(_ target: FolderTarget) {
-        renameText = target.name
         renaming = target
     }
 
@@ -415,11 +424,11 @@ private struct NewFolderSheet: View {
                     }
                 }
                 Section("Color") {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 5) {
                         ForEach(InkColor.folderColors, id: \.self) { option in
                             Circle()
                                 .fill(Color(cgColor: option.cgColor))
-                                .frame(width: 28, height: 28)
+                                .frame(width: 26, height: 26)
                                 .padding(3)
                                 .overlay { Circle().strokeBorder(Color.accentColor, lineWidth: 2).opacity(option == color ? 1 : 0) }
                                 .onTapGesture { color = option }
@@ -456,7 +465,8 @@ private struct NewFolderSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .frame(width: 380, height: 440)
+        .presentationCompactAdaptation(.popover)
     }
 }
 
@@ -468,15 +478,39 @@ private struct NotesBrowser: View {
 
     @State private var isSelecting = false
     @State private var selected: Set<URL> = []
-    @State private var renaming: NotebookFolder.StoredNote?
-    @State private var renameText = ""
-    @State private var moving: [NotebookFolder.StoredNote] = []
+    /// Rename, Move or Export for one note, open at its card.
+    @State private var cardPanel: OpenCardPanel?
+    /// Move or Export for the selected notes, open under its button.
+    @State private var selectionPanel: NotePanel?
     @State private var creatingFolder = false
-    @State private var exporting: [NotebookFolder.StoredNote] = []
     @State private var confirmingEmpty = false
     @State private var deletedNoteActions: NotebookFolder.StoredNote?
 
+    private enum NotePanel {
+        case rename
+        case move
+        case export
+    }
+
+    private struct OpenCardPanel: Equatable {
+        var url: URL
+        var panel: NotePanel
+    }
+
     private var inRecentlyDeleted: Bool { library.section == .recentlyDeleted && !library.isSearching }
+
+    #if DEBUG
+    /// `-DebugRenameCard` / `-DebugMoveCard` open that panel at the first note's card;
+    /// `-DebugNewFolder` opens the new-folder form under + New.
+    private func openDebugPanels(_ notes: [NotebookFolder.StoredNote]) {
+        let arguments = ProcessInfo.processInfo.arguments
+        if let first = notes.first {
+            if arguments.contains("-DebugRenameCard") { cardPanel = OpenCardPanel(url: first.url, panel: .rename) }
+            if arguments.contains("-DebugMoveCard") { cardPanel = OpenCardPanel(url: first.url, panel: .move) }
+        }
+        if arguments.contains("-DebugNewFolder") { creatingFolder = true }
+    }
+    #endif
 
     var body: some View {
         let notes = library.notes
@@ -526,26 +560,11 @@ private struct NotesBrowser: View {
             isSelecting = false
             selected = []
         }
-        .alert("Rename Note", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }), presenting: renaming) { note in
-            TextField("Title", text: $renameText)
-            Button("Rename") {
-                let title = renameText
-                Task { await library.renameNote(note, to: title) }
-            }
-            Button("Cancel", role: .cancel) {}
+        #if DEBUG
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { openDebugPanels(library.notes) }
         }
-        .sheet(isPresented: Binding(get: { !moving.isEmpty }, set: { if !$0 { moving = [] } })) {
-            MoveNotesSheet(library: library, notes: moving) {
-                isSelecting = false
-                selected = []
-            }
-        }
-        .sheet(isPresented: $creatingFolder) {
-            NewFolderSheet(library: library, kind: .folder(inGroup: nil))
-        }
-        .sheet(isPresented: Binding(get: { !exporting.isEmpty }, set: { if !$0 { exporting = [] } })) {
-            ExportSheet(source: .notes(exporting), folder: library.folder)
-        }
+        #endif
         .fileImporter(isPresented: Bindable(model).isImportingPDF, allowedContentTypes: [.pdf], allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result, !urls.isEmpty else { return }
             Task {
@@ -554,17 +573,6 @@ private struct NotesBrowser: View {
                     model.openNote(note)
                 }
             }
-        }
-        .confirmationDialog("Delete everything in Recently Deleted?", isPresented: $confirmingEmpty, titleVisibility: .visible) {
-            Button("Delete Forever", role: .destructive) { Task { await library.emptyRecentlyDeleted() } }
-        } message: {
-            Text("This can't be undone.")
-        }
-        .confirmationDialog(deletedNoteActions?.record.title ?? "", isPresented: Binding(
-            get: { deletedNoteActions != nil }, set: { if !$0 { deletedNoteActions = nil } }
-        ), titleVisibility: .visible, presenting: deletedNoteActions) { note in
-            Button("Restore") { Task { await library.restore([note]) } }
-            Button("Delete Forever", role: .destructive) { Task { await library.deleteForever([note]) } }
         }
     }
 
@@ -607,10 +615,21 @@ private struct NotesBrowser: View {
                 } else {
                     Button("Favorite") { Task { await library.setFavorite(true, chosen); finishSelecting() } }
                         .disabled(chosen.isEmpty)
-                    Button("Export") { exporting = chosen }
+                    Button("Export") { selectionPanel = .export }
                         .disabled(chosen.isEmpty)
-                    Button("Move") { moving = chosen }
+                        .popover(isPresented: Binding(get: { selectionPanel == .export }, set: { if !$0 { selectionPanel = nil } }),
+                                 arrowEdge: .top) {
+                            exportPanel(chosen) { selectionPanel = nil; finishSelecting() }
+                        }
+                    Button("Move") { selectionPanel = .move }
                         .disabled(chosen.isEmpty)
+                        .popover(isPresented: Binding(get: { selectionPanel == .move }, set: { if !$0 { selectionPanel = nil } }),
+                                 arrowEdge: .top) {
+                            MoveNotesSheet(library: library, notes: chosen) {
+                                selectionPanel = nil
+                                finishSelecting()
+                            }
+                        }
                     Button("Delete", role: .destructive) { Task { await library.delete(chosen); finishSelecting() } }
                         .disabled(chosen.isEmpty)
                 }
@@ -637,6 +656,11 @@ private struct NotesBrowser: View {
                 }
                 .tint(.primary)
                 .accessibilityLabel("More")
+                .confirmationDialog("Delete everything in Recently Deleted?", isPresented: $confirmingEmpty, titleVisibility: .visible) {
+                    Button("Delete Forever", role: .destructive) { Task { await library.emptyRecentlyDeleted() } }
+                } message: {
+                    Text("This can't be undone.")
+                }
                 if !inRecentlyDeleted {
                     Menu {
                         Button("Note", systemImage: "square.and.pencil") { newNote() }
@@ -651,6 +675,9 @@ private struct NotesBrowser: View {
                             .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                     .accessibilityLabel("New")
+                    .popover(isPresented: $creatingFolder, arrowEdge: .top) {
+                        NewFolderSheet(library: library, kind: .folder(inGroup: nil))
+                    }
                 }
             }
         }
@@ -690,6 +717,35 @@ private struct NotesBrowser: View {
                 }
             }
         }
+        .popover(isPresented: Binding(get: { cardPanel?.url == note.url }, set: { if !$0 { cardPanel = nil } })) {
+            switch cardPanel?.panel {
+            case .rename?:
+                RenameField(title: "Rename Note", text: note.record.title) { title in
+                    cardPanel = nil
+                    Task { await library.renameNote(note, to: title) }
+                }
+            case .move?:
+                MoveNotesSheet(library: library, notes: [note]) { cardPanel = nil }
+            case .export?:
+                exportPanel([note]) { cardPanel = nil }
+            case nil:
+                EmptyView()
+            }
+        }
+        .confirmationDialog(note.record.title, isPresented: Binding(
+            get: { deletedNoteActions?.url == note.url }, set: { if !$0 { deletedNoteActions = nil } }
+        ), titleVisibility: .visible) {
+            Button("Restore") { Task { await library.restore([note]) } }
+            Button("Delete Forever", role: .destructive) { Task { await library.deleteForever([note]) } }
+        }
+    }
+
+    private func exportPanel(_ notes: [NotebookFolder.StoredNote], done: @escaping () -> Void) -> some View {
+        NavigationStack {
+            ExportOptionsView(source: .notes(notes), folder: library.folder, onExported: done)
+        }
+        .frame(width: 380, height: notes.count > 1 ? 400 : 320)
+        .presentationCompactAdaptation(.popover)
     }
 
     private func tap(_ note: NotebookFolder.StoredNote) {
@@ -708,18 +764,15 @@ private struct NotesBrowser: View {
             Button("Restore", systemImage: "arrow.uturn.backward") { Task { await library.restore([note]) } }
             Button("Delete Forever", systemImage: "trash", role: .destructive) { Task { await library.deleteForever([note]) } }
         } else {
-            Button("Rename", systemImage: "pencil") {
-                renameText = note.record.title
-                renaming = note
-            }
+            Button("Rename", systemImage: "pencil") { cardPanel = OpenCardPanel(url: note.url, panel: .rename) }
             if note.record.isFavorite {
                 Button("Remove from Favorites", systemImage: "star.slash") { Task { await library.setFavorite(false, [note]) } }
             } else {
                 Button("Add to Favorites", systemImage: "star") { Task { await library.setFavorite(true, [note]) } }
             }
-            Button("Move to…", systemImage: "folder") { moving = [note] }
+            Button("Move to…", systemImage: "folder") { cardPanel = OpenCardPanel(url: note.url, panel: .move) }
             Button("Duplicate", systemImage: "plus.square.on.square") { Task { await library.duplicate(note) } }
-            Button("Export as PDF…", systemImage: "square.and.arrow.up") { exporting = [note] }
+            Button("Export as PDF…", systemImage: "square.and.arrow.up") { cardPanel = OpenCardPanel(url: note.url, panel: .export) }
             Button("Delete", systemImage: "trash", role: .destructive) { Task { await library.delete([note]) } }
         }
     }
@@ -873,10 +926,9 @@ private struct MoveNotesSheet: View {
             }
             .navigationTitle(notes.count == 1 ? "Move “\(notes[0].record.title)”" : "Move \(notes.count) Notes")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-            }
         }
+        .frame(width: 360, height: 460)
+        .presentationCompactAdaptation(.popover)
     }
 
     private func destination(_ name: String, color: InkColor?, subject: String?) -> some View {
