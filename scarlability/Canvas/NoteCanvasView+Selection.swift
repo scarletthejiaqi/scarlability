@@ -80,7 +80,7 @@ extension NoteCanvasView {
     }
 
     func beginSelectGesture(at point: CGPoint) {
-        editMenu?.dismissMenu()
+        actionBar.hide()
         if let grab = selectionGrab(at: point) {
             manipulation = Manipulation(kind: grab)
             lassoStart = point
@@ -252,7 +252,7 @@ extension NoteCanvasView {
         selection = nil
         unhideAll()
         liveInk.hideSelection()
-        editMenu?.dismissMenu()
+        actionBar.hide()
     }
 
     func showSelectionOverlay() {
@@ -382,67 +382,77 @@ extension NoteCanvasView {
         return board.contains(pasteboardTypes: [Self.selectionPasteboardType]) || board.hasImages || board.hasStrings
     }
 
-    /// Shows the selection's menu above it, or (with `point`) a Paste menu there.
+    /// Shows the action bar above the selection, or (with `point`) a Paste bar there.
     func presentMenu(at point: CGPoint? = nil) {
-        let anchor: CGPoint
-        if let point {
-            anchor = point
-        } else if let selection {
-            anchor = CGPoint(x: selection.box.midX, y: selection.box.minY)
-        } else {
+        menuPoint = point
+        let actions = selectionActions()
+        guard !actions.isEmpty, let target = menuTarget() else {
+            actionBar.hide()
             return
         }
-        menuPoint = point
-        let screen = contentView.convert(anchor, to: self)
-        editMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: screen))
+        actionBar.show(actions, over: target, within: actionBarBounds)
     }
 
-    /// Keeps the menu clear of the selection: above it, or below if there's no room.
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction, targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
-        if menuPoint == nil, let selection {
-            return contentView.convert(selection.box, to: self)
+    /// Keeps the action bar next to the selection when the page scrolls or zooms.
+    func repositionActionBar() {
+        guard !actionBar.isHidden, let target = menuTarget() else { return }
+        actionBar.reposition(over: target, within: actionBarBounds)
+    }
+
+    /// What the action bar points at, in canvas coordinates.
+    private func menuTarget() -> CGRect? {
+        if let menuPoint {
+            return CGRect(origin: contentView.convert(menuPoint, to: self), size: .zero)
         }
-        return CGRect(origin: configuration.sourcePoint, size: .zero)
+        return selection.map { contentView.convert($0.box, to: self) }
     }
 
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration,
-                             suggestedActions: [UIMenuElement]) -> UIMenu? {
-        let paste = UIAction(title: "Paste", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.paste() }
+    private var actionBarBounds: CGRect {
+        bounds.inset(by: UIEdgeInsets(top: 0, left: 0, bottom: max(safeAreaInsets.bottom, keyboardOverlap), right: 0))
+    }
+
+    /// Delete, Copy, Paste and Cut first, then the rest.
+    func selectionActions() -> [SelectionActionBar.Action] {
+        typealias Action = SelectionActionBar.Action
+        let paste = Action(title: "Paste", systemImage: "doc.on.clipboard") { [weak self] in self?.paste() }
         guard let selection else {
-            return canPaste ? UIMenu(children: [paste]) : nil
+            return canPaste ? [paste] : []
         }
-        var items: [UIMenuElement] = [
-            UIAction(title: "Cut", image: UIImage(systemName: "scissors")) { [weak self] _ in self?.cutSelection() },
-            UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copySelection() },
+        var actions = [
+            Action(title: "Delete", systemImage: "trash", isDestructive: true) { [weak self] in self?.deleteSelection() },
+            Action(title: "Copy", systemImage: "doc.on.doc") { [weak self] in
+                self?.copySelection()
+                self?.actionBar.hide()
+            },
         ]
-        if canPaste { items.append(paste) }
-        items.append(UIAction(title: "Duplicate", image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateSelection() })
+        if canPaste { actions.append(paste) }
+        actions.append(Action(title: "Cut", systemImage: "scissors") { [weak self] in self?.cutSelection() })
+        actions.append(Action(title: "Duplicate", systemImage: "plus.square.on.square") { [weak self] in self?.duplicateSelection() })
         if selection.strokes.isEmpty, selection.items.count == 1, let only = selection.items.first {
             if only.item.text != nil {
-                items.append(UIAction(title: "Edit Text", image: UIImage(systemName: "character.cursor.ibeam")) { [weak self] _ in
+                actions.append(Action(title: "Edit Text", systemImage: "character.cursor.ibeam") { [weak self] in
                     self?.clearSelection()
                     self?.settings.tool = .text
                     self?.beginTextEditing(only, isNew: false)
                 })
             } else if only.item.image != nil {
-                items.append(UIAction(title: "Crop", image: UIImage(systemName: "crop")) { [weak self] _ in self?.startCropping(only) }
-                )
+                actions.append(Action(title: "Crop", systemImage: "crop") { [weak self] in self?.startCropping(only) })
             }
         }
         if !selection.strokes.isEmpty || selection.items.contains(where: { $0.item.text != nil }) {
-            items.append(colorMenu())
+            actions.append(Action(title: "Color", systemImage: "paintpalette", menu: colorMenu()))
         }
         if !selection.strokes.isEmpty {
-            items.append(UIMenu(title: "Thickness", image: UIImage(systemName: "lineweight"), children: [
-                UIAction(title: "Thinner") { [weak self] _ in self?.scaleSelectionWidth(by: 0.8) },
-                UIAction(title: "Thicker") { [weak self] _ in self?.scaleSelectionWidth(by: 1.25) },
-            ]))
+            actions.append(Action(title: "Thickness", systemImage: "lineweight", menu: UIMenu(children: [
+                UIAction(title: "Thinner", image: UIImage(systemName: "minus")) { [weak self] _ in self?.scaleSelectionWidth(by: 0.8) },
+                UIAction(title: "Thicker", image: UIImage(systemName: "plus")) { [weak self] _ in self?.scaleSelectionWidth(by: 1.25) },
+            ])))
         }
-        items += [
-            UIAction(title: "Copy as Image", image: UIImage(systemName: "photo")) { [weak self] _ in self?.copySelectionAsImage() },
-            UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.deleteSelection() },
-        ]
-        return UIMenu(children: items)
+        actions.append(Action(title: "Copy as Image", systemImage: "photo") { [weak self] in
+            self?.copySelectionAsImage()
+            self?.actionBar.hide()
+        })
+        return actions
     }
 
     func colorMenu() -> UIMenu {
