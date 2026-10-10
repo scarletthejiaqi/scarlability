@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 /// First-run screen: pick the folder (normally in iCloud Drive) where notes are stored.
 struct FolderSetupView: View {
-    @Environment(AppModel.self) private var model
+    let model: AppModel
     var errorMessage: String?
     @State private var isPicking = false
     @State private var pickerError: String?

@@ -9,10 +9,11 @@ struct PagePanel: View {
 
     let document: NoteDocument
     let session: EditorSession
+    /// Kept by the note screen, so reopening the panel shows them right away.
+    let thumbnails: PageThumbnails
     /// Space at the top for the toolbar buttons above the panel.
     var topInset: CGFloat = 0
 
-    @State private var thumbnails = PageThumbnails()
     @State private var deleting: UUID?
 
     var body: some View {
@@ -97,6 +98,7 @@ struct PagePanel: View {
         }
         .accessibilityLabel("Page \(number)")
         .task(id: page.revision) {
+            guard !thumbnails.isCurrent(page) else { return }
             // While you write, redraw a little after the last change rather than after every stroke.
             if thumbnails.images[page.id] != nil {
                 try? await Task.sleep(for: .milliseconds(400))
@@ -111,9 +113,16 @@ struct PagePanel: View {
 @Observable
 final class PageThumbnails {
     private(set) var images: [UUID: CGImage] = [:]
+    /// The page revision each picture shows.
+    @ObservationIgnored private var revisions: [UUID: Int] = [:]
     let scale: CGFloat = 2
 
+    func isCurrent(_ page: NoteDocument.Page) -> Bool {
+        images[page.id] != nil && revisions[page.id] == page.revision
+    }
+
     func render(_ page: NoteDocument.Page, in document: NoteDocument) async {
+        let revision = page.revision
         var pictures: [String: CGImage] = [:]
         for item in page.visibleItems {
             if let name = item.image?.fileName, pictures[name] == nil {
@@ -141,6 +150,7 @@ final class PageThumbnails {
         }.value
         if let image {
             images[page.id] = image
+            revisions[page.id] = revision
         }
     }
 }

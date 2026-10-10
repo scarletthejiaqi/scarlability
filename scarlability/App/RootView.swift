@@ -1,12 +1,13 @@
 import SwiftUI
 
 struct RootView: View {
-    @Environment(AppModel.self) private var model
+    let model: AppModel
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         #if os(iOS)
         content
+            .onAppear(perform: configureMacWindow)
             .onOpenURL { url in
                 if url.pathExtension.lowercased() == "pdf" {
                     model.importPDF(from: url)
@@ -21,32 +22,36 @@ struct RootView: View {
                     Task { await library.reload() }
                 }
             }
-        #else
-        ContentUnavailableView(
-            "Scarlability for Mac is coming",
-            systemImage: "macbook",
-            description: Text("The Mac version arrives in milestone 6. For now, write on your iPad.")
-        )
-        .frame(minWidth: 480, minHeight: 320)
         #endif
     }
 
     #if os(iOS)
+    /// On the Mac: a sensible smallest window, and no title text over the app's own toolbar.
+    private func configureMacWindow() {
+        #if targetEnvironment(macCatalyst)
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            scene.sizeRestrictions?.minimumSize = CGSize(width: 900, height: 640)
+            scene.titlebar?.titleVisibility = .hidden
+            scene.titlebar?.toolbar = nil
+        }
+        #endif
+    }
+
     @ViewBuilder
     private var content: some View {
         @Bindable var model = model
         switch model.state {
         case .needsFolder:
-            FolderSetupView()
+            FolderSetupView(model: model)
         case .loading:
             ProgressView("Opening your notes…")
         case .ready(let library):
-            LibraryView(library: library)
+            LibraryView(library: library, model: model)
                 .fullScreenCover(item: $model.openDocument) { document in
-                    NoteEditorScreen(document: document)
+                    NoteEditorScreen(document: document, model: model)
                 }
         case .failed(let message):
-            FolderSetupView(errorMessage: message)
+            FolderSetupView(model: model, errorMessage: message)
         }
     }
     #endif

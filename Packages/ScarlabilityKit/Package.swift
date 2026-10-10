@@ -5,7 +5,7 @@ import PackageDescription
 // and the note files that sync through iCloud Drive.
 let package = Package(
     name: "ScarlabilityKit",
-    platforms: [.iOS(.v18), .macOS(.v15)],
+    platforms: [.iOS(.v18), .macCatalyst(.v18), .macOS(.v15)],
     products: [
         .library(name: "ScarlabilityKit", targets: ["ScarlabilityKit"]),
     ],

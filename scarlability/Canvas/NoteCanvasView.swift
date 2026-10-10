@@ -16,7 +16,8 @@ struct NoteCanvas: UIViewRepresentable {
     }
 
     func updateUIView(_ canvas: NoteCanvasView, context: Context) {
-        canvas.drawsWithFinger = settings.drawsWithFinger
+        // On the Mac the mouse and trackpad draw (two-finger scrolling still scrolls).
+        canvas.drawsWithFinger = settings.drawsWithFinger || Platform.isMac
         canvas.tool = settings.tool
         canvas.snapsHighlighterToText = settings.highlighterSnapsToText
         canvas.topInset = topInset
@@ -52,6 +53,8 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     let selectionTap = UITapGestureRecognizer()
     /// Delete, Copy, Paste, Cut… above the selection.
     let actionBar = SelectionActionBar()
+    /// The note's undo history for the system's Undo and Redo (see NoteCanvasView+Keyboard).
+    let documentUndo = DocumentUndoManager()
 
     var pageViews: [UUID: PageView] = [:]
     /// Which pages currently show the thin line along their bottom edge (all but the last).
@@ -269,7 +272,8 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         scrollView.addGestureRecognizer(strokeRecognizer)
 
         let finger = NSNumber(value: UITouch.TouchType.direct.rawValue)
-        zoomPinch.allowedTouchTypes = [finger]
+        // Fingers, and a trackpad's pinch (Mac, or iPad with a trackpad).
+        zoomPinch.allowedTouchTypes = [finger, NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
         zoomPinch.addTarget(self, action: #selector(handlePinch(_:)))
         zoomPinch.delegate = self
         scrollView.addGestureRecognizer(zoomPinch)
@@ -298,6 +302,10 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         setUpImages()
         addSubview(actionBar)
         session.handler = { [weak self] command in self?.perform(command) }
+        documentUndo.document = document
+        documentUndo.willUndo = { [weak self] in
+            self?.clearSelection()
+        }
 
         drawsWithFinger = settings.drawsWithFinger
         tool = settings.tool
@@ -342,16 +350,31 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     /// sharp as the screen needs. With the screen's own scale, the normal zoom would get tiles at
     /// 4 px/pt shrunk to 2.6, so finished ink looked softer than the live stroke the moment the
     /// pen lifted. The 0.1% extra keeps rounding from picking the next level up.
-    var tileScale: CGFloat {
+    var idealTileScale: CGFloat {
         let zoom = widthFitZoom
         guard zoom > 0 else { return traitCollection.displayScale }
         let level = pow(2, ceil(log2(zoom)))
         return traitCollection.displayScale * zoom / level * 1.001
     }
 
+    /// The tile resolution the pages use. It only follows `idealTileScale` when the width changes
+    /// a lot (like turning the iPad): changing it throws away every drawn tile, so the page
+    /// would blank and redraw. Smaller changes (opening the page panel, resizing the Mac window)
+    /// just zoom, which reuses the tiles already drawn, like pinching does.
+    var tileScale: CGFloat = 0
+
+    func updateTileScale() {
+        let ideal = idealTileScale
+        guard tileScale == 0 || abs(ideal / tileScale - 1) > 0.3 else { return }
+        tileScale = ideal
+        for view in pageViews.values {
+            view.tileScale = tileScale
+        }
+    }
+
     /// Pixels per content point that the page tiles use at the current zoom.
     var tileRasterScale: CGFloat {
-        let base = tileScale
+        let base = tileScale > 0 ? tileScale : idealTileScale
         let needed = scrollView.zoomScale * traitCollection.displayScale / base
         // PageTileLayer has levels from 1/8× to 8×.
         let level = min(max(ceil(log2(needed) - 1e-6), -3), 3)
@@ -363,6 +386,14 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         guard let size = document.pages.first?.record.size else { return widthFitZoom }
         let height = bounds.height - safeAreaInsets.top - safeAreaInsets.bottom
         return min(bounds.width / size.width, height / size.height)
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        // Take keyboard focus, for shortcuts and the system's Undo.
+        if window != nil {
+            DispatchQueue.main.async { [weak self] in self?.becomeFirstResponder() }
+        }
     }
 
     override func safeAreaInsetsDidChange() {
@@ -390,9 +421,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         laidOutSize = bounds.size
 
         updateZoomLocks()
-        for view in pageViews.values {
-            view.tileScale = tileScale
-        }
+        updateTileScale()
         scrollView.maximumZoomScale = widthFitZoom * Self.maxZoom
         if widthChanged {
             scrollView.zoomScale = widthFitZoom * relativeZoom
@@ -555,7 +584,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         }
         for page in document.pages where pageViews[page.id] == nil {
             let view = PageView()
-            view.tileScale = tileScale
+            view.tileScale = tileScale > 0 ? tileScale : idealTileScale
             let id = page.id
             view.setTileDrawnHandler { [weak self] role, rect, version in
                 Task { @MainActor [self] in self?.tileDidDraw(onPage: id, isInk: role == .ink, rect: rect, version: version) }
@@ -663,6 +692,9 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     }
 
     func beginStroke(_ recognizer: StrokeGestureRecognizer) {
+        if !isFirstResponder, textEditing == nil {
+            becomeFirstResponder()
+        }
         let samples = recognizer.takeSamples()
         guard let start = samples.first,
               let page = document.pages.first(where: { pageViews[$0.id]?.frame.contains(start.location) == true }),
@@ -684,8 +716,10 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
                 baseWidth: presets.currentSize,
                 // The highlighter's chisel tip doesn't respond to pressure.
                 curve: isHighlighter ? PressureCurve(sensitivity: 0) : settings.pressureCurve,
-                // Smoothing is set in screen points, so it feels the same at any zoom.
-                smoothing: CGFloat(settings.smoothing) / scrollView.zoomScale,
+                // Smoothing is set in screen points, so it feels the same at any zoom. A mouse or
+                // trackpad reports far fewer, coarser positions than the Pencil, so it gets more.
+                smoothing: (recognizer.touchType == .pencil ? CGFloat(settings.smoothing) : max(CGFloat(settings.smoothing), 1.6))
+                    / scrollView.zoomScale,
                 pressureSmoothing: settings.pressureSmoothing / scrollView.zoomScale
             ),
             color: presets.currentColor,
@@ -971,7 +1005,9 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     func configureTouchTypes() {
         let pencil = NSNumber(value: UITouch.TouchType.pencil.rawValue)
         let finger = NSNumber(value: UITouch.TouchType.direct.rawValue)
-        strokeRecognizer.allowedTouchTypes = drawsWithFinger ? [pencil, finger] : [pencil]
+        // A mouse or trackpad click-and-drag draws too (Mac, or iPad with one).
+        let pointer = NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)
+        strokeRecognizer.allowedTouchTypes = drawsWithFinger ? [pencil, finger, pointer] : [pencil, pointer]
         scrollView.panGestureRecognizer.allowedTouchTypes = [finger]
         scrollView.panGestureRecognizer.minimumNumberOfTouches = drawsWithFinger ? 2 : 1
         // With finger drawing on, one finger already works the select tool through the stroke recognizer.

@@ -140,7 +140,7 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] **Look:** the page fills the screen. Floating on top: **←** (left), the note's name with the tool palette under it (middle: pen, highlighter, eraser, Aa text, lasso, ⊕ insert, ✋ finger drawing, with the current tool's colors and sizes below), and **undo, redo, ⋯, pages** (right). No status bar.
 - [ ] **⋯** has **Rename Note, Paper, Settings**.
 - [ ] **Page number** at the bottom right ("2 / 5"). The ⌃ and ⌄ arrows jump to the page above and below.
-- [ ] **Page panel:** tap the pages button (top right, two rectangles). Thumbnails of every page appear on the right and the page shrinks to fit next to them. The current page has a blue border. Tap a thumbnail to jump there. Write something; its thumbnail updates a moment later.
+- [ ] **Page panel:** tap the pages button (top right, two rectangles). Thumbnails of every page appear on the right and the page shrinks to fit next to them, **without flashing**. Close and reopen it: the thumbnails are there right away. The current page has a blue border. Tap a thumbnail to jump there. Write something; its thumbnail updates a moment later.
 - [ ] In the panel, the dashed **+** adds a blank page at the end and jumps to it.
 - [ ] Long-press a thumbnail → **Delete Page** → confirm. The page is gone, also after closing and reopening the note.
 - [ ] **No lag (不拖):** write fast, long cursive lines. The line stays right under the Pencil tip; it doesn't trail behind, rubber-band (拉扯) or shrink back (往回缩) when you lift.
@@ -161,6 +161,20 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] **Include Paper off:** no lines and white pages; white-on-dark ink comes out black.
 - [ ] **Export (library):** long-press a note → **Export as PDF…** Or **⋯ → Select Notes**, pick several, **Export**, then **One PDF** or **A PDF per Note**.
 - [ ] Library thumbnails and the page panel show the PDF pages.
+
+## 13d. Mac app (M6)
+**Run it:** in Xcode, choose **My Mac (Mac Catalyst)** at the top center (next to the scheme), then press **⌘R**. The first time, it asks for the notes folder: choose **iCloud Drive** (the same place as on the iPad). Like the iPad, it uses your free Apple ID; on the Mac it doesn't stop after 7 days.
+- [ ] The Mac app looks like the iPad app: same library, same note screen and toolbar.
+- [ ] **Drawing:** click and drag with the mouse or trackpad to write; every tool works (pen, fountain pen, highlighter, eraser, text, lasso). Lines have a fixed width (no pressure on Mac).
+- [ ] **Scrolling and zoom:** two fingers on the trackpad (or the mouse wheel) scroll; pinch on the trackpad zooms (with the same zoom lock); **⌘=** zoom in, **⌘-** zoom out, **⌘0** back to page width.
+- [ ] **Menu bar:** **File → New Note (⌘N)**, **Import PDF… (⇧⌘I)**, **Back to Library (⌘[)**. **Edit → Undo (⌘Z) / Redo (⇧⌘Z)**, **Cut / Copy / Paste / Select All (⌘A) / Delete**. **Tools → Pen ⌘1, Highlighter ⌘2, Eraser ⌘3, Text ⌘4, Lasso ⌘5**.
+- [ ] With something selected: **Delete** (⌫) deletes it, **⌘D** duplicates it, **Esc** deselects.
+- [ ] While typing in a text box, ⌘Z undoes typing; otherwise it undoes the note.
+- [ ] **Right-click** a note in the library for its menu (Rename, Favorite, Move, Duplicate, Export, Delete). Drag notes onto folders.
+- [ ] No camera, document scanner or "draw with finger" on the Mac (they're iPad-only).
+- [ ] **Export as PDF** opens the Mac Share menu (Save to Files, AirDrop, Mail…).
+- [ ] Make the window bigger and smaller: the page keeps filling the width, without flashing.
+- [ ] **iPad with a keyboard:** the same shortcuts work. Hold ⌘ to see them.
 
 ## 14. Questions to answer while testing
 1. **Pressure feel:** too subtle, too strong, or right compared to Notability?

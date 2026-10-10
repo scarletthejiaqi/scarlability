@@ -13,8 +13,12 @@ struct scarlabilityApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .environment(model)
+            // Handed down explicitly rather than through the environment: on the Mac (macOS 15's
+            // SwiftUI), views reading an @Observable object from the environment crashed.
+            RootView(model: model)
+        }
+        .commands {
+            NoteCommands(model: model)
         }
     }
 }

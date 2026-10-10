@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Mac only (Mac Catalyst). The sandbox and access to the folder you pick come from build settings;
+  this adds keeping that access between launches (a security-scoped bookmark).
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.files.bookmarks.app-scope</key>
+	<true/>
+</dict>
+</plist>

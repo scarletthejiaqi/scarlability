@@ -121,6 +121,8 @@ extension NoteCanvasView: UITextViewDelegate {
         guard let editing = textEditing else { return }
         textEditing = nil
         textView.resignFirstResponder()
+        // Back to the page, so keyboard shortcuts (and Undo) work on the note again.
+        becomeFirstResponder()
         textView.isHidden = true
         textWidthHandle.isHidden = true
         session.isEditingText = false

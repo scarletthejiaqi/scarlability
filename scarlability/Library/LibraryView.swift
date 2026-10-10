@@ -7,16 +7,17 @@ import UniformTypeIdentifiers
 /// selected notes as cards on the right.
 struct LibraryView: View {
     @Bindable var library: LibraryModel
+    let model: AppModel
 
     var body: some View {
         HStack(spacing: 0) {
-            LibrarySidebar(library: library)
+            LibrarySidebar(library: library, model: model)
                 .frame(width: 300)
             Rectangle()
                 .fill(Color(.separator))
                 .frame(width: 0.5)
                 .ignoresSafeArea()
-            NotesBrowser(library: library)
+            NotesBrowser(library: library, model: model)
         }
         .alert("Something went wrong", isPresented: Binding(
             get: { library.errorMessage != nil },
@@ -48,7 +49,7 @@ private enum NewFolderKind: Identifiable {
 
 private struct LibrarySidebar: View {
     @Bindable var library: LibraryModel
-    @Environment(AppModel.self) private var model
+    let model: AppModel
 
     @State private var showsSettings = false
     @State private var creating: NewFolderKind?
@@ -463,7 +464,7 @@ private struct NewFolderSheet: View {
 
 private struct NotesBrowser: View {
     @Bindable var library: LibraryModel
-    @Environment(AppModel.self) private var model
+    let model: AppModel
 
     @State private var isSelecting = false
     @State private var selected: Set<URL> = []
@@ -471,7 +472,6 @@ private struct NotesBrowser: View {
     @State private var renameText = ""
     @State private var moving: [NotebookFolder.StoredNote] = []
     @State private var creatingFolder = false
-    @State private var importingPDF = false
     @State private var exporting: [NotebookFolder.StoredNote] = []
     @State private var confirmingEmpty = false
     @State private var deletedNoteActions: NotebookFolder.StoredNote?
@@ -536,7 +536,7 @@ private struct NotesBrowser: View {
         .sheet(isPresented: Binding(get: { !exporting.isEmpty }, set: { if !$0 { exporting = [] } })) {
             ExportSheet(source: .notes(exporting), folder: library.folder)
         }
-        .fileImporter(isPresented: $importingPDF, allowedContentTypes: [.pdf], allowsMultipleSelection: true) { result in
+        .fileImporter(isPresented: Bindable(model).isImportingPDF, allowedContentTypes: [.pdf], allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result, !urls.isEmpty else { return }
             Task {
                 let notes = await library.importPDFs(urls)
@@ -630,7 +630,7 @@ private struct NotesBrowser: View {
                 if !inRecentlyDeleted {
                     Menu {
                         Button("Note", systemImage: "square.and.pencil") { newNote() }
-                        Button("Import PDF…", systemImage: "doc.badge.plus") { importingPDF = true }
+                        Button("Import PDF…", systemImage: "doc.badge.plus") { model.isImportingPDF = true }
                         Button("Folder", systemImage: "folder.badge.plus") { creatingFolder = true }
                     } label: {
                         Label("New", systemImage: "plus")

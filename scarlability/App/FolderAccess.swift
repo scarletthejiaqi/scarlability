@@ -76,7 +76,9 @@ final class FolderAccess {
         isAccessing = false
     }
 
-    #if os(macOS)
+    // The Mac app is sandboxed: access to a picked folder only lasts across launches through a
+    // security-scoped bookmark.
+    #if targetEnvironment(macCatalyst)
     private static let creationOptions: URL.BookmarkCreationOptions = .withSecurityScope
     private static let resolutionOptions: URL.BookmarkResolutionOptions = .withSecurityScope
     #else

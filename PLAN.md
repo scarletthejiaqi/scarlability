@@ -1,4 +1,4 @@
-# Scarlability — Build Plan (v9: M4.5 built; all testing at the end, see TESTING.md)
+# Scarlability — Build Plan (v10: M5 and M6 built; all testing at the end, see TESTING.md)
 
 A note-taking app for **iPad + Mac** that copies the *basic* parts of Notability:
 1. Notability-style tools: pressure pen, highlighter, eraser, text, selection, shape snap
@@ -146,8 +146,8 @@ iCloud Drive/Scarlability/          ← made inside the place you pick
 | **M3** ✅ built | Library: sidebar (All Notes, Unfiled, Dividers ▸ Subjects with 8 colors, Recently Deleted for 30 days), thumbnail grid, sort, title search, rename/move/duplicate/delete, drag onto a subject, multi-select Move/Delete, rename by tapping the title; folders in Files mirror it | Organize notes like in Notability |
 | **M4** ✅ built | Text boxes (tap to place, grow as you type, width handle, 6 fonts, sizes, colors, B/I/U, bullet and numbered lists, paste); images (Photos, Files, camera, paste; move, resize, rotate, crop); scanned documents become new pages; text and images sit under ink; tap or lasso to select them | Type and add pictures |
 | **M4.5** ✅ built | Notability look: library with Search, Notes (count), Folders (colored dots; folder groups fold open) and Recently Deleted; All Notes / Recents / Favorites / Unfiled tabs; cards with folder tags; ★ Favorites; + New. Note screen: page fills the screen edge to edge (zoom lock with no gray edge), floating toolbar (tools, 7 colors, 3 sizes, finger drawing), page number with ⌃/⌄, page panel with thumbnails, add and delete pages. Also: smoother, lag-free writing and the Delete-first selection bar | Use an app that looks and feels like Notability |
-| **M5** | PDF: import (new note or into a note), annotate, text-snap highlighter toggle, all export options | Annotate lecture slides and export them |
-| **M6** | Mac app: same library + editor, trackpad/mouse drawing, keyboard shortcuts (⌘Z, ⌘N, ⌘V…) | Use the app on your MacBook |
+| **M5** ✅ built | PDF: import (new note, into a note, or "Open in" from other apps), vector PDF pages, annotate, Snap to Text highlighter, export (all / this page / range; with or without paper; several notes as one PDF or one each) | Annotate lecture slides and export them |
+| **M6** ✅ built | Mac app (Mac Catalyst, like Notability's Mac app): same library + editor, mouse/trackpad drawing, two-finger scroll, trackpad pinch zoom, menu bar (File/Edit/Tools) and keyboard shortcuts (⌘N, ⇧⌘I, ⌘Z, ⌘C/⌘X/⌘V, ⌘A, ⌫, ⌘D, ⌘1–5, ⌘=/⌘-/⌘0), runs on macOS 15 | Use the app on your MacBook |
 | **M7** | Two-device sync: per-device files, merging, folder watching, handling files that aren't downloaded yet | Write on iPad and see it on your Mac shortly after |
 | **M8** | Polish: performance with 100+ page notes, faster thumbnails, settings screen, app icon | Daily-drive it |
 

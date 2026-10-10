@@ -13,6 +13,8 @@ final class AppModel {
     }
 
     private(set) var state: State = .needsFolder
+    /// The library's "Import PDF" file picker is showing (also opened from the menu bar).
+    var isImportingPDF = false
     /// The note being edited, shown full screen over the library.
     var openDocument: NoteDocument?
     let toolSettings = ToolSettings()
@@ -74,6 +76,32 @@ final class AppModel {
             } catch {
                 library.errorMessage = "Couldn't open “\(note.record.title)”: \(error.localizedDescription)"
             }
+        }
+    }
+
+    /// File › New Note (⌘N): a new note in the folder the library shows, opened right away.
+    func newNote() {
+        guard case .ready(let library) = state else { return }
+        Task {
+            if openDocument != nil {
+                closeDocument()
+                try? await Task.sleep(for: .milliseconds(400))
+            }
+            if let note = await library.createNote() {
+                openNote(note)
+            }
+        }
+    }
+
+    /// File › Import PDF (⇧⌘I): back to the library, then its file picker.
+    func requestPDFImport() {
+        guard case .ready = state else { return }
+        Task {
+            if openDocument != nil {
+                closeDocument()
+                try? await Task.sleep(for: .milliseconds(400))
+            }
+            isImportingPDF = true
         }
     }
 

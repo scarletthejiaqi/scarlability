@@ -10,10 +10,10 @@ struct EditorToolbar: View {
     let document: NoteDocument
     @Bindable var settings: ToolSettings
     let session: EditorSession
+    let model: AppModel
     @Binding var showsPages: Bool
     /// Where the palette ends, from the top of the screen.
     @Binding var bottom: CGFloat
-    @Environment(AppModel.self) private var model
 
     @State private var leftWidth: CGFloat = 0
     @State private var rightWidth: CGFloat = 0
@@ -78,7 +78,8 @@ struct EditorToolbar: View {
     }
 
     private var trailing: some View {
-        NoteActions(document: document, settings: settings, session: session, showsPages: $showsPages, onRename: startRenaming)
+        NoteActions(document: document, settings: settings, session: session, model: model, showsPages: $showsPages,
+                    onRename: startRenaming)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rightWidth = $0 }
     }
 
@@ -119,9 +120,9 @@ private struct NoteActions: View {
     let document: NoteDocument
     @Bindable var settings: ToolSettings
     let session: EditorSession
+    let model: AppModel
     @Binding var showsPages: Bool
     let onRename: () -> Void
-    @Environment(AppModel.self) private var model
 
     @State private var showsSettings = false
     @State private var showsPaper = false
@@ -207,20 +208,10 @@ private struct ToolPalette: View {
                 ToolButton(tool: .text, systemImage: "textformat", title: "Text", settings: settings)
                 ToolButton(tool: .select, systemImage: "lasso", title: "Lasso", settings: settings)
                 InsertMenu(session: session)
-                Rectangle().fill(Color(.separator)).frame(width: 1, height: 26).padding(.horizontal, 6)
-                Button {
-                    settings.drawsWithFinger.toggle()
-                } label: {
-                    Image(systemName: "hand.draw")
-                        .font(.system(size: 21))
-                        .frame(width: 44, height: 42)
-                        .background(settings.drawsWithFinger ? Color.accentColor.opacity(0.16) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .foregroundStyle(settings.drawsWithFinger ? Color.accentColor : .primary)
+                // On the Mac the mouse always draws, so there's no finger-drawing switch.
+                if !Platform.isMac {
+                    fingerDrawingButton
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Draw with finger")
-                .accessibilityAddTraits(settings.drawsWithFinger ? .isSelected : [])
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
@@ -240,6 +231,25 @@ private struct ToolPalette: View {
         }
         .floatingCard(cornerRadius: 16)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var fingerDrawingButton: some View {
+        Group {
+            Rectangle().fill(Color(.separator)).frame(width: 1, height: 26).padding(.horizontal, 6)
+            Button {
+                settings.drawsWithFinger.toggle()
+            } label: {
+                    Image(systemName: "hand.draw")
+                        .font(.system(size: 21))
+                        .frame(width: 44, height: 42)
+                        .background(settings.drawsWithFinger ? Color.accentColor.opacity(0.16) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .foregroundStyle(settings.drawsWithFinger ? Color.accentColor : .primary)
+                }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Draw with finger")
+            .accessibilityAddTraits(settings.drawsWithFinger ? .isSelected : [])
+        }
     }
 }
 
@@ -281,8 +291,11 @@ private struct InsertMenu: View {
     var body: some View {
         Menu {
             Button("Photos", systemImage: "photo.on.rectangle") { session.send(.insertImage(.photos)) }
-            Button("Take Photo", systemImage: "camera") { session.send(.insertImage(.camera)) }
-            Button("Scan Document", systemImage: "doc.viewfinder") { session.send(.insertImage(.scanner)) }
+            // The Mac has no camera picker or document scanner.
+            if !Platform.isMac {
+                Button("Take Photo", systemImage: "camera") { session.send(.insertImage(.camera)) }
+                Button("Scan Document", systemImage: "doc.viewfinder") { session.send(.insertImage(.scanner)) }
+            }
             Button("PDF or Image from Files", systemImage: "folder") { session.send(.insertImage(.files)) }
             Button("Paste", systemImage: "doc.on.clipboard") { session.send(.insertImage(.paste)) }
         } label: {
@@ -771,12 +784,14 @@ struct EditorSettingsView: View {
                     Text("Write in the strip above to try each change. Pick the pen type (Pen or Fountain) in the toolbar. "
                          + "Tell me the numbers you like best and I'll make them the defaults.")
                 }
-                Section {
-                    Toggle("Draw with finger", isOn: $settings.drawsWithFinger)
-                } footer: {
-                    Text(settings.drawsWithFinger
-                         ? "One finger writes. Use two fingers to scroll and zoom."
-                         : "Only Apple Pencil writes. Fingers scroll and zoom.")
+                if !Platform.isMac {
+                    Section {
+                        Toggle("Draw with finger", isOn: $settings.drawsWithFinger)
+                    } footer: {
+                        Text(settings.drawsWithFinger
+                             ? "One finger writes. Use two fingers to scroll and zoom."
+                             : "Only Apple Pencil writes. Fingers scroll and zoom.")
+                    }
                 }
                 Section("Notes folder") {
                     Text(folderName ?? "Not chosen")
