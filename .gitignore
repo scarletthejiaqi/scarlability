@@ -4,3 +4,6 @@ xcuserdata/
 .build/
 .swiftpm/
 DerivedData/
+
+# Chat log with Claude, kept private
+context.md
