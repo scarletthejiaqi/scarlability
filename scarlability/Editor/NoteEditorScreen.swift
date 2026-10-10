@@ -14,15 +14,15 @@ struct NoteEditorScreen: View {
     @State private var toolbarBottom: CGFloat = 0
 
     var body: some View {
-        HStack(spacing: 0) {
-            NoteCanvas(document: document, settings: model.toolSettings, session: session, topInset: toolbarBottom + 10)
+        // The panel slides in over the canvas; the canvas keeps its size and zooms the page to fit
+        // beside the panel, smoothly, staying right against it.
+        ZStack(alignment: .trailing) {
+            NoteCanvas(document: document, settings: model.toolSettings, session: session, topInset: toolbarBottom + 10,
+                       rightInset: showsPages ? PagePanel.width : 0)
                 .id(ObjectIdentifier(document))
-                // The page takes its new width in one step while only the panel slides in;
-                // resizing it through every frame of the animation made the page flash.
-                .transaction { $0.animation = nil }
                 .overlay(alignment: .bottomTrailing) {
                     PageIndicator(document: document, session: session)
-                        .padding(.trailing, 14)
+                        .padding(.trailing, 14 + (showsPages ? PagePanel.width : 0))
                         .padding(.bottom, 24)
                 }
             if showsPages {
@@ -57,7 +57,7 @@ struct NoteEditorScreen: View {
             if ProcessInfo.processInfo.arguments.contains("-DebugTogglePages") {
                 for step in 1...6 {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5 * Double(step)) {
-                        withAnimation(.snappy(duration: 0.25)) { showsPages.toggle() }
+                        withAnimation(.easeInOut(duration: 0.28)) { showsPages.toggle() }
                     }
                 }
             }

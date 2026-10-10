@@ -23,7 +23,7 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] **Lag:** when you write fast, the ink stays close to the Pencil tip.
 - [ ] **Steady tip (笔尖不动):** watch the line right behind the Pencil as you write small, fast notes. It doesn't wiggle, shift or change thickness after it's drawn.
 - [ ] **钢笔 Fountain pen:** in the pen's row tap **Pen ▾ → Fountain Pen**. Light strokes come out thin and pressing hard gives bold lines, clearly more than the normal Pen. **Pen ▾ → Pen** switches back. Both use the same colors and sizes.
-- [ ] **Pen Feel (笔感):** **⋯ → Settings**. Write in the "Try your pen here" strip at the top while moving the sliders: **Smoothing 平滑**, **Pen pressure 压感**, **Fountain pen pressure 钢笔压感**, **Tip 跟手** (Steadier ↔ Closer to tip). **Clear** empties the strip and **Reset Pen Feel** puts the sliders back. Write down the numbers you like best and tell me.
+- [ ] **Pen Feel (笔感):** **⋯ → Settings**. Write in the "Try your pen here" strip at the top (the ink appears exactly under the Pencil) while moving the sliders: **Smoothing 平滑**, **Pen pressure 压感**, **Fountain pen pressure 钢笔压感**, **Tip 跟手** (Steadier ↔ Closer to tip). **Clear** empties the strip and **Reset Pen Feel** puts the sliders back. Write down the numbers you like best and tell me.
 - [ ] **Palm:** rest your hand on the screen while writing. The page doesn't move and no marks appear.
 - [ ] **Zoomed in:** zoom in and write. The ink is sharp.
 
@@ -141,7 +141,7 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] **⋯** opens a panel **right under the button** (nothing pops up in the middle of the screen) with **Rename Note, Paper, Export as PDF, Settings**. Each opens inside the same panel; **‹** goes back.
 - [ ] Everywhere else too: whatever a button or long-press opens appears **at that button or item**: the rename field under the note's name, a note's Rename / Move / Export at its card, New Folder under **+**, delete questions at the folder, page or note.
 - [ ] **Page number** at the bottom right ("2 / 5"). The ⌃ and ⌄ arrows jump to the page above and below.
-- [ ] **Page panel:** tap the pages button (top right, two rectangles). Thumbnails of every page appear on the right and the page shrinks to fit next to them, **without flashing**. Close and reopen it: the thumbnails are there right away. The current page has a blue border. Tap a thumbnail to jump there. Write something; its thumbnail updates a moment later.
+- [ ] **Page panel:** tap the pages button (top right, two rectangles). The panel slides in from the right while the page smoothly shrinks to stay right against it (no jump, no flash). Close and reopen it: the thumbnails are there right away. The current page has a blue border. Tap a thumbnail to jump there. Write something; its thumbnail updates a moment later.
 - [ ] In the panel, the dashed **+** adds a blank page at the end and jumps to it.
 - [ ] Long-press a thumbnail → **Delete Page** → confirm. The page is gone, also after closing and reopening the note.
 - [ ] **No lag (不拖):** write fast, long cursive lines. The line stays right under the Pencil tip; it doesn't trail behind, rubber-band (拉扯) or shrink back (往回缩) when you lift.

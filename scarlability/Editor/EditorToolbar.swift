@@ -142,7 +142,8 @@ private struct NoteActions: View {
                 }
             }
             iconButton("rectangle.portrait.on.rectangle.portrait", label: "Pages", isOn: showsPages) {
-                withAnimation(.snappy(duration: 0.25)) { showsPages.toggle() }
+                // The same timing as the page zooming to fit beside the panel.
+                withAnimation(.easeInOut(duration: 0.28)) { showsPages.toggle() }
             }
         }
         .foregroundStyle(.primary)

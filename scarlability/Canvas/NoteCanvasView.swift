@@ -10,6 +10,8 @@ struct NoteCanvas: UIViewRepresentable {
     let session: EditorSession
     /// How much of the top the toolbar covers. The first page starts below it.
     var topInset: CGFloat = 0
+    /// How much of the right the page panel covers. The page fits beside it.
+    var rightInset: CGFloat = 0
 
     func makeUIView(context: Context) -> NoteCanvasView {
         NoteCanvasView(document: document, settings: settings, session: session)
@@ -21,6 +23,7 @@ struct NoteCanvas: UIViewRepresentable {
         canvas.tool = settings.tool
         canvas.snapsHighlighterToText = settings.highlighterSnapsToText
         canvas.topInset = topInset
+        canvas.rightInset = rightInset
     }
 }
 
@@ -341,7 +344,33 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     }
 
     /// Zoom at which the page width fills the screen.
-    var widthFitZoom: CGFloat { bounds.width / contentWidth }
+    var widthFitZoom: CGFloat { visibleWidth / contentWidth }
+
+    /// The width the pages fit in: the canvas minus the page panel, when it's open.
+    var visibleWidth: CGFloat { max(bounds.width - rightInset, 1) }
+
+    /// Room on the right for the page panel, which slides in over the canvas. The page shrinks
+    /// to fit beside it smoothly, at the same time: just a zoom, which reuses the tiles already
+    /// drawn (resizing the canvas instead redrew the page, which flashed or jumped).
+    var rightInset: CGFloat = 0 {
+        didSet {
+            guard rightInset != oldValue, laidOutSize != .zero else { return }
+            let relative = relativeZoom
+            updateZoomLocks()
+            scrollView.maximumZoomScale = widthFitZoom * Self.maxZoom
+            let zoom = widthFitZoom * relative
+            // Keep what's at the top of the screen there.
+            let top = (scrollView.contentOffset.y + scrollView.adjustedContentInset.top) / scrollView.zoomScale
+            UIView.animate(withDuration: 0.28, delay: 0, options: [.curveEaseInOut, .allowUserInteraction, .beginFromCurrentState]) {
+                self.scrollView.zoomScale = zoom
+                self.centerContent()
+                let inset = self.scrollView.adjustedContentInset
+                let maxY = max(-inset.top, self.scrollView.contentSize.height - self.scrollView.bounds.height + inset.bottom)
+                self.scrollView.contentOffset = CGPoint(x: -inset.left, y: min(max(top * zoom - inset.top, -inset.top), maxY))
+            }
+            relativeZoom = relative
+        }
+    }
 
     /// Resolution for the page tiles, chosen so they match the screen pixel for pixel at the
     /// normal writing zoom (page width fills the screen) and at 2×, 4×… that zoom.
@@ -385,7 +414,7 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     var pageFitZoom: CGFloat {
         guard let size = document.pages.first?.record.size else { return widthFitZoom }
         let height = bounds.height - safeAreaInsets.top - safeAreaInsets.bottom
-        return min(bounds.width / size.width, height / size.height)
+        return min(visibleWidth / size.width, height / size.height)
     }
 
     override func didMoveToWindow() {
@@ -458,15 +487,17 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
 
     /// Centers the pages horizontally when zoomed out narrower than the screen.
     func centerContent() {
-        let inset = max(0, (scrollView.bounds.width - scrollView.contentSize.width) / 2)
-        // Room at the bottom for the keyboard, so you can scroll the last lines above it.
-        scrollView.contentInset = UIEdgeInsets(top: topInset, left: inset, bottom: max(keyboardOverlap, safeAreaInsets.bottom), right: inset)
+        let inset = max(0, (visibleWidth - scrollView.contentSize.width) / 2)
+        // Room at the bottom for the keyboard, so you can scroll the last lines above it, and on
+        // the right for the page panel.
+        scrollView.contentInset = UIEdgeInsets(top: topInset, left: inset, bottom: max(keyboardOverlap, safeAreaInsets.bottom),
+                                               right: inset + rightInset)
     }
 
     /// Remembers which page is in the middle of the screen, for "this page" paper changes and
     /// the page number.
     func updateVisiblePage() {
-        let middle = scrollView.convert(CGPoint(x: scrollView.bounds.midX, y: scrollView.bounds.midY), to: contentView)
+        let middle = scrollView.convert(CGPoint(x: scrollView.bounds.minX + visibleWidth / 2, y: scrollView.bounds.midY), to: contentView)
         let page = document.pages.first { pageViews[$0.id].map { $0.frame.minY <= middle.y && middle.y < $0.frame.maxY } ?? false }
             ?? (middle.y < 0 ? document.pages.first : document.pages.last)
         document.visiblePageID = page?.id

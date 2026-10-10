@@ -83,7 +83,7 @@ extension NoteCanvasView {
 
     /// The middle of the screen, in content coordinates.
     var viewportCenter: CGPoint {
-        scrollView.convert(CGPoint(x: scrollView.bounds.midX, y: scrollView.bounds.midY), to: contentView)
+        scrollView.convert(CGPoint(x: scrollView.bounds.minX + visibleWidth / 2, y: scrollView.bounds.midY), to: contentView)
     }
 
     // MARK: - Drawing items
