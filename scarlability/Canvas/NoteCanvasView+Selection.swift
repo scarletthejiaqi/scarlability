@@ -220,25 +220,29 @@ extension NoteCanvasView {
         return path
     }
 
-    /// Selects the strokes mostly inside the outline, and the text boxes and images whose
-    /// centers are inside it. A freeform loop stays on screen as the selection's outline.
+    /// Selects the strokes the outline takes (freeform: every stroke the loop touches; box: the
+    /// ones mostly inside), and the text boxes and images whose centers are inside it. A freeform
+    /// loop stays on screen as the selection's outline.
     func select(strokesInside outline: [CGPoint]) {
         // A couple of points apart on screen is plenty for the loop's shape, and keeps checking a
         // big loop against a full page quick.
         let lasso = Lasso(outline, spacing: 2 / scrollView.zoomScale)
+        let isFreeform = settings.selectMode == .freeform
+        // The loop's line is drawn about a point and a half wide on screen.
+        let tolerance = 1 / scrollView.zoomScale
         var strokes: [NoteDocument.PlacedStroke] = []
         var items: [NoteDocument.PlacedItem] = []
         for page in document.pages {
             guard let view = pageViews[page.id], view.frame.intersects(lasso.bounds) else { continue }
             let local = lasso.offsetBy(dx: -view.frame.minX, dy: -view.frame.minY)
-            for stroke in page.visibleStrokes where local.selects(stroke) {
+            for stroke in page.visibleStrokes where local.selects(stroke, rule: isFreeform ? .touches : .mostlyInside, tolerance: tolerance) {
                 strokes.append(.init(stroke: stroke, pageID: page.id))
             }
             for item in page.visibleItems where local.contains(CGPoint(x: item.bounds.midX, y: item.bounds.midY)) {
                 items.append(.init(item: item, pageID: page.id))
             }
         }
-        setSelection(strokes: strokes, items: items, outline: settings.selectMode == .freeform ? lasso.path : nil)
+        setSelection(strokes: strokes, items: items, outline: isFreeform ? lasso.path : nil)
         if selection != nil {
             presentMenu()
         }

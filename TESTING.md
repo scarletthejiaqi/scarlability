@@ -64,7 +64,7 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] You stay on the eraser after lifting the Pencil.
 
 ## 7. Select (M2)
-- [ ] **Freeform deletes what you circle (fixed):** write a few lines, circle the middle of them with **Freeform** (go around twice if you like, or let the loop cross itself), then **Delete**. Everything inside the loop goes, including the writing in the middle. Strokes only partly inside go if most of them is inside.
+- [ ] **Freeform takes everything it touches (changed):** write a few lines, circle some of them with **Freeform** (go around twice if you like, or let the loop cross itself), then **Delete**. Everything inside the loop goes, including the writing in the middle, and so does any stroke the loop touches: partly inside, or just crossed by the loop's line. **Box** still takes only strokes mostly inside the box.
 - [ ] **The loop stays as the outline (new):** after circling, the dashed outline is your loop's shape, not a box. Dragging inside the loop moves it with the writing; resizing and rotating turn it too. **Box** mode still shows a box.
 - [ ] **Freeform**: draw a loop around some writing. It gets a dashed box and a bar of buttons pops up **above** it (not covering it), centered.
 - [ ] **Box**: drag a rectangle to select.

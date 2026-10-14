@@ -77,6 +77,34 @@ struct SelectionTests {
         #expect(lasso.selects(Stroke(color: .black, points: fastInside + slowOutside)))
     }
 
+    /// Freeform select takes any stroke the loop touches: partly inside, or just crossed or grazed
+    /// by the line, even if most of it is outside.
+    @Test func freeformSelectsWhatTheLoopTouches() {
+        let square = [CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0), CGPoint(x: 100, y: 100), CGPoint(x: 0, y: 100)]
+        let lasso = Lasso(square)
+        func line(_ xs: ClosedRange<Int>, y: Float = 50, width: Float = 2) -> Stroke {
+            Stroke(color: .black, points: xs.map { InkPoint(x: Float($0), y: y, width: width) })
+        }
+        let mostlyOutside = line(90...300)
+        #expect(lasso.selects(mostlyOutside, rule: .touches))
+        #expect(!lasso.selects(mostlyOutside, rule: .mostlyInside))
+        // A thick line just outside the left edge, whose ink reaches over the loop's line.
+        let grazing = Stroke(color: .black, points: (10...90).map { InkPoint(x: -3, y: Float($0), width: 8) })
+        #expect(lasso.selects(grazing, rule: .touches))
+        // A long straight stroke drawn with only its two ends, crossing the line.
+        let crossing = Stroke(color: .black, points: [InkPoint(x: 50, y: -50, width: 2), InkPoint(x: 50, y: 30, width: 2)])
+        #expect(lasso.selects(crossing, rule: .touches))
+        let nearby = line(110...300)
+        #expect(!lasso.selects(nearby, rule: .touches))
+        #expect(lasso.selects(nearby, rule: .touches, tolerance: 12))
+        #expect(lasso.selects(Stroke(color: .black, points: [InkPoint(x: 50, y: 50, width: 2)]), rule: .touches))
+    }
+
+    @Test func segmentsThatCrossAreZeroApart() {
+        #expect(Lasso.distance(CGPoint(x: 0, y: 0), CGPoint(x: 10, y: 10), CGPoint(x: 0, y: 10), CGPoint(x: 10, y: 0)) == 0)
+        #expect(abs(Lasso.distance(CGPoint(x: 0, y: 0), CGPoint(x: 10, y: 0), CGPoint(x: 0, y: 3), CGPoint(x: 10, y: 3)) - 3) < 1e-9)
+    }
+
     @Test func lassoDropsCrowdedPointsButKeepsItsEnds() {
         let points = (0...1000).map { CGPoint(x: Double($0) * 0.1, y: 0) }
         let lasso = Lasso(points, spacing: 1)
