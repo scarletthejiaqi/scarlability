@@ -33,6 +33,13 @@ struct PressureCurveTests {
         }
     }
 
+    /// The fountain pen's thinnest line isn't a scratchy hairline, but it still gets as bold.
+    @Test func fountainPenHairlineStaysVisible() {
+        let fountain = PressureCurve.fountain()
+        #expect(abs(fountain.widthFactor(forNormalizedForce: 0) - 0.448) < 1e-9)
+        #expect(abs(fountain.widthFactor(forNormalizedForce: 1) - 1.72) < 1e-9)
+    }
+
     @Test func rangeFollowsSensitivity() {
         let curve = PressureCurve(sensitivity: 1)
         #expect(abs(curve.widthFactor(forNormalizedForce: 0) - 0.3) < 1e-9)
@@ -68,6 +75,39 @@ struct StrokeBuilderTests {
         let before = builder.finishedPoints()[index].width
         builder.updateForce(0.6, at: index)
         #expect(builder.finishedPoints()[index].width > before)
+    }
+
+    /// Evening pressure out twice keeps a jittery hand from turning into a lumpy line, without
+    /// giving up the thick and thin: a firm press still gets just as bold.
+    @Test func twoPressureStagesEvenOutJitter() {
+        func widths(stages: Int) -> [Float] {
+            var builder = StrokeBuilder(baseWidth: 2, curve: .fountain(), smoothing: 0, pressureSmoothing: 1.5, pressureStages: stages)
+            for i in 0...300 {
+                let jitter = i % 2 == 0 ? 0.04 : -0.04
+                builder.add(CGPoint(x: Double(i) * 0.3, y: 0), force: (i < 150 ? 0.15 : 0.5) + jitter)
+            }
+            return builder.finishedPoints().map(\.width)
+        }
+        func wobble(_ w: [Float]) -> Float {
+            var total: Float = 0
+            for i in 1..<(w.count - 1) {
+                total += abs(w[i - 1] - 2 * w[i] + w[i + 1])
+            }
+            return total / Float(w.count - 2)
+        }
+        let one = widths(stages: 1), two = widths(stages: 2)
+        #expect(wobble(two) < wobble(one) * 0.6)
+        #expect(abs(two.last! - one.last!) < 0.05)
+        #expect(two.first == one.first)
+    }
+
+    @Test func oneStageIsTheSameAsBefore() {
+        var builder = StrokeBuilder(baseWidth: 2, curve: PressureCurve(sensitivity: 1), smoothing: 0, pressureSmoothing: 2)
+        builder.add(CGPoint(x: 0, y: 0), force: 0.1)
+        builder.add(CGPoint(x: 2, y: 0), force: 0.5)
+        let take = 1 - exp(-2.0 / 2)
+        let expected = 2 * PressureCurve(sensitivity: 1).widthFactor(forNormalizedForce: 0.1 + 0.4 * take)
+        #expect(abs(Double(builder.finishedPoints()[1].width) - expected) < 1e-5)
     }
 
     @Test func livePointsIncludePredictions() {

@@ -17,13 +17,16 @@ public struct StrokeBuilder: Sendable {
     /// How quickly the width follows pressure: the length (in page points) over which a change
     /// in pressure is mostly taken up. Shorter reacts faster.
     public let pressureSmoothing: CGFloat
+    /// How many times pressure is evened out in a row. Twice makes thick and thin parts flow
+    /// into each other instead of swelling into blobs where the pen slows down.
+    public let pressureStages: Int
 
     /// The samples, with widths from (evened-out) pressure applied.
     private var raw: [InkPoint] = []
     /// Pressure per sample as reported (nil for input without pressure), kept for force updates.
     private var forces: [Double?] = []
-    /// Pressure per sample after evening out.
-    private var evenedForces: [Double?] = []
+    /// Pressure per sample after each stage of evening out.
+    private var evenedForces: [[Double?]]
     /// Cumulative length along `raw`.
     private var arc: [CGFloat] = []
     private var smoothed: [InkPoint] = []
@@ -36,11 +39,13 @@ public struct StrokeBuilder: Sendable {
     /// Default `pressureSmoothing`, in screen points (divide by the zoom).
     public static let screenPressureSmoothing: CGFloat = 2.5
 
-    public init(baseWidth: Double, curve: PressureCurve, smoothing: CGFloat, pressureSmoothing: CGFloat = 2) {
+    public init(baseWidth: Double, curve: PressureCurve, smoothing: CGFloat, pressureSmoothing: CGFloat = 2, pressureStages: Int = 1) {
         self.baseWidth = baseWidth
         self.curve = curve
         self.smoothing = smoothing
         self.pressureSmoothing = pressureSmoothing
+        self.pressureStages = max(pressureStages, 1)
+        evenedForces = Array(repeating: [], count: self.pressureStages)
     }
 
     public var isEmpty: Bool { raw.isEmpty }
@@ -55,7 +60,9 @@ public struct StrokeBuilder: Sendable {
         }
         arc.append((raw.last.map { $0.location.distance(to: location) } ?? 0) + (arc.last ?? 0))
         forces.append(force)
-        evenedForces.append(nil)
+        for stage in evenedForces.indices {
+            evenedForces[stage].append(nil)
+        }
         raw.append(InkPoint(location, width: baseWidth))
         evenPressure(from: raw.count - 1)
         return raw.count - 1
@@ -73,18 +80,22 @@ public struct StrokeBuilder: Sendable {
     /// Recomputes the evened-out pressure, and the widths, from `start` to the end.
     private mutating func evenPressure(from start: Int) {
         for i in start..<raw.count {
-            guard let force = forces[i] else {
-                evenedForces[i] = nil
+            guard var evened = forces[i] else {
+                for stage in evenedForces.indices {
+                    evenedForces[stage][i] = nil
+                }
                 raw[i].width = Float(baseWidth)
                 continue
             }
-            var evened = force
-            if i > 0, let previous = evenedForces[i - 1], pressureSmoothing > 0 {
-                // An exponential average over arc length: the same evening-out fast or slow.
-                let take = 1 - exp(-(arc[i] - arc[i - 1]) / pressureSmoothing)
-                evened = previous + (force - previous) * Double(take)
+            // An exponential average over arc length (the same evening-out fast or slow), applied
+            // to the previous stage's result.
+            let take = i > 0 && pressureSmoothing > 0 ? 1 - exp(-(arc[i] - arc[i - 1]) / pressureSmoothing) : 1
+            for stage in evenedForces.indices {
+                if i > 0, let previous = evenedForces[stage][i - 1] {
+                    evened = previous + (evened - previous) * Double(take)
+                }
+                evenedForces[stage][i] = evened
             }
-            evenedForces[i] = evened
             raw[i].width = Float(max(baseWidth * curve.widthFactor(forNormalizedForce: evened), Self.minimumWidth))
         }
     }

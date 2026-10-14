@@ -1,6 +1,6 @@
 import CoreGraphics
 
-/// Which strokes the eraser and the select tool touch.
+/// Which strokes the eraser touches. (The select tool's loop is `Lasso`.)
 public enum StrokeHitTesting {
     /// Whether an eraser of `radius` moving from `a` to `b` touches the stroke's ink.
     public static func eraser(from a: CGPoint, to b: CGPoint, radius: CGFloat, touches stroke: Stroke) -> Bool {
@@ -32,28 +32,6 @@ public enum StrokeHitTesting {
         if !current.isEmpty { pieces.append(current) }
         // A single leftover point would show as a stray dot.
         return pieces.filter { $0.count > 1 }
-    }
-
-    /// Whether a lasso (a closed outline) selects the stroke: at least half its points are inside.
-    public static func lasso(_ outline: [CGPoint], selects stroke: Stroke) -> Bool {
-        guard outline.count >= 3, !stroke.points.isEmpty else { return false }
-        let inside = stroke.points.filter { contains(outline, $0.location) }.count
-        return inside * 2 >= stroke.points.count
-    }
-
-    /// Even-odd point-in-polygon test.
-    public static func contains(_ polygon: [CGPoint], _ point: CGPoint) -> Bool {
-        var inside = false
-        var j = polygon.count - 1
-        for i in polygon.indices {
-            let a = polygon[i], b = polygon[j]
-            if (a.y > point.y) != (b.y > point.y),
-               point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x {
-                inside.toggle()
-            }
-            j = i
-        }
-        return inside
     }
 
     static func distance(from p: CGPoint, toSegment a: CGPoint, _ b: CGPoint) -> CGFloat {

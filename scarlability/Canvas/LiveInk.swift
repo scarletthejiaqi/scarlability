@@ -358,11 +358,13 @@ struct SelectionHandles {
     var rotate: CGPoint
     var rotateStem: (CGPoint, CGPoint)
 
-    init(box: CGRect, rotation: CGFloat, zoom: CGFloat) {
+    /// - Parameter shape: The outline to draw instead of the box (a freeform selection's loop),
+    ///   already moved and turned like the selection.
+    init(box: CGRect, rotation: CGFloat, zoom: CGFloat, shape: CGPath? = nil) {
         let center = CGPoint(x: box.midX, y: box.midY)
         let turn = CGAffineTransform(translationX: center.x, y: center.y).rotated(by: rotation).translatedBy(x: -center.x, y: -center.y)
         var outlineTransform = turn
-        outline = CGPath(rect: box, transform: &outlineTransform)
+        outline = shape ?? CGPath(rect: box, transform: &outlineTransform)
         resize = CGPoint(x: box.maxX, y: box.maxY).applying(turn)
         let top = CGPoint(x: box.midX, y: box.minY)
         rotate = CGPoint(x: box.midX, y: box.minY - Self.rotateOffset / zoom).applying(turn)

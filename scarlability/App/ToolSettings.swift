@@ -200,10 +200,13 @@ final class ToolSettings {
     }
 
     /// How quickly the pen's width follows pressure, in screen points (shorter is quicker). The
-    /// fountain pen reacts quicker.
+    /// fountain pen evens pressure out twice (`pressureStages`), each a little quicker than the
+    /// pen's one, so its wide thick-and-thin range flows instead of swelling into lumps.
     var pressureSmoothing: CGFloat {
-        penStyle == .fountain ? StrokeBuilder.screenPressureSmoothing / 2 : StrokeBuilder.screenPressureSmoothing
+        penStyle == .fountain ? StrokeBuilder.screenPressureSmoothing * 0.8 : StrokeBuilder.screenPressureSmoothing
     }
+
+    var pressureStages: Int { penStyle == .fountain ? 2 : 1 }
 
     /// Puts the Pen Feel settings back to how they started.
     func resetPenFeel() {

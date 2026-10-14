@@ -63,20 +63,32 @@ extension NoteCanvasView {
     func selectionGrab(at point: CGPoint) -> Manipulation.Kind? {
         guard let selection else { return nil }
         let zoom = scrollView.zoomScale
-        let handles = SelectionHandles(box: selection.box, rotation: 0, zoom: zoom)
+        let frame = selection.frame
+        let handles = SelectionHandles(box: frame, rotation: 0, zoom: zoom)
         let reach = Self.handleReach / zoom
-        let center = CGPoint(x: selection.box.midX, y: selection.box.midY)
+        let center = CGPoint(x: frame.midX, y: frame.midY)
         if point.distance(to: handles.rotate) <= reach {
             return .rotate(center: center, startAngle: atan2(point.y - center.y, point.x - center.x))
         }
         if point.distance(to: handles.resize) <= reach {
-            let anchor = selection.box.origin
+            let anchor = frame.origin
             return .resize(anchor: anchor, startDistance: max(point.distance(to: anchor), 1))
         }
-        if selection.box.insetBy(dx: -8 / zoom, dy: -8 / zoom).contains(point) {
+        if selectionContains(point) {
             return .move(start: point)
         }
         return nil
+    }
+
+    /// Whether a point is on the selection: inside its loop (or box), or just outside the edge.
+    func selectionContains(_ point: CGPoint) -> Bool {
+        guard let selection else { return false }
+        let slop = 8 / scrollView.zoomScale
+        guard let outline = selection.outline else {
+            return selection.box.insetBy(dx: -slop, dy: -slop).contains(point)
+        }
+        return outline.contains(point, using: .winding)
+            || outline.copy(strokingWithWidth: 2 * slop, lineCap: .round, lineJoin: .round, miterLimit: 1).contains(point)
     }
 
     func beginSelectGesture(at point: CGPoint) {
@@ -159,7 +171,7 @@ extension NoteCanvasView {
     }
 
     func selectToolTapped(at point: CGPoint) {
-        if let selection, selection.box.insetBy(dx: -8, dy: -8).contains(point) {
+        if selectionContains(point) {
             presentMenu()
             return
         }
@@ -209,29 +221,30 @@ extension NoteCanvasView {
     }
 
     /// Selects the strokes mostly inside the outline, and the text boxes and images whose
-    /// centers are inside it.
+    /// centers are inside it. A freeform loop stays on screen as the selection's outline.
     func select(strokesInside outline: [CGPoint]) {
-        let xs = outline.map(\.x), ys = outline.map(\.y)
-        let bounds = CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+        // A couple of points apart on screen is plenty for the loop's shape, and keeps checking a
+        // big loop against a full page quick.
+        let lasso = Lasso(outline, spacing: 2 / scrollView.zoomScale)
         var strokes: [NoteDocument.PlacedStroke] = []
         var items: [NoteDocument.PlacedItem] = []
         for page in document.pages {
-            guard let view = pageViews[page.id], view.frame.intersects(bounds) else { continue }
-            let local = outline.map { CGPoint(x: $0.x - view.frame.minX, y: $0.y - view.frame.minY) }
-            for stroke in page.visibleStrokes where StrokeHitTesting.lasso(local, selects: stroke) {
+            guard let view = pageViews[page.id], view.frame.intersects(lasso.bounds) else { continue }
+            let local = lasso.offsetBy(dx: -view.frame.minX, dy: -view.frame.minY)
+            for stroke in page.visibleStrokes where local.selects(stroke) {
                 strokes.append(.init(stroke: stroke, pageID: page.id))
             }
-            for item in page.visibleItems where StrokeHitTesting.contains(local, CGPoint(x: item.bounds.midX, y: item.bounds.midY)) {
+            for item in page.visibleItems where local.contains(CGPoint(x: item.bounds.midX, y: item.bounds.midY)) {
                 items.append(.init(item: item, pageID: page.id))
             }
         }
-        setSelection(strokes: strokes, items: items)
+        setSelection(strokes: strokes, items: items, outline: settings.selectMode == .freeform ? lasso.path : nil)
         if selection != nil {
             presentMenu()
         }
     }
 
-    func setSelection(strokes: [NoteDocument.PlacedStroke], items: [NoteDocument.PlacedItem] = []) {
+    func setSelection(strokes: [NoteDocument.PlacedStroke], items: [NoteDocument.PlacedItem] = [], outline: CGPath? = nil) {
         guard !strokes.isEmpty || !items.isEmpty else {
             clearSelection()
             return
@@ -244,7 +257,7 @@ extension NoteCanvasView {
             let origin = pageOrigin(placed.pageID)
             box = box.union(placed.item.bounds.offsetBy(dx: origin.x, dy: origin.y))
         }
-        selection = Selection(strokes: strokes, items: items, box: box)
+        selection = Selection(strokes: strokes, items: items, box: box, outline: outline)
         showSelectionOverlay()
     }
 
@@ -260,17 +273,22 @@ extension NoteCanvasView {
             liveInk.hideSelection()
             return
         }
-        var box = selection.box
+        var frame = selection.frame
         var rotation: CGFloat = 0
+        var transform = CGAffineTransform.identity
         if let current = manipulation {
+            transform = current.transform
             switch current.kind {
             case .rotate:
                 rotation = current.rotation
             case .move, .resize:
-                box = box.applying(current.transform)
+                frame = frame.applying(current.transform)
             }
         }
-        liveInk.showSelection(SelectionHandles(box: box, rotation: rotation, zoom: scrollView.zoomScale), zoom: scrollView.zoomScale)
+        // The loop moves, resizes and turns with the selection.
+        let shape = selection.outline.map { $0.copy(using: &transform) ?? $0 }
+        liveInk.showSelection(SelectionHandles(box: frame, rotation: rotation, zoom: scrollView.zoomScale, shape: shape),
+                              zoom: scrollView.zoomScale)
     }
 
     /// Leaves the selection out of the page tiles while its moving preview is shown.
@@ -320,7 +338,8 @@ extension NoteCanvasView {
         hiddenItemIDs = []
         liveInk.clearPreview()
         document.apply(NoteDocument.Edit(removed: selection.strokes, added: strokes, items: edits))
-        setSelection(strokes: strokes, items: items)
+        var transform = current.transform
+        setSelection(strokes: strokes, items: items, outline: selection.outline.map { $0.copy(using: &transform) ?? $0 })
     }
 
     /// Copies of strokes moved by a transform in content coordinates, re-split across pages.
@@ -404,7 +423,7 @@ extension NoteCanvasView {
         if let menuPoint {
             return CGRect(origin: contentView.convert(menuPoint, to: self), size: .zero)
         }
-        return selection.map { contentView.convert($0.box, to: self) }
+        return selection.map { contentView.convert($0.frame, to: self) }
     }
 
     private var actionBarBounds: CGRect {
@@ -504,7 +523,7 @@ extension NoteCanvasView {
         let edits = zip(selection.items, items).filter { $0.0.item != $0.1.item }
             .map { NoteDocument.ItemEdit(pageID: $0.0.pageID, before: $0.0.item, after: $0.1.item) }
         document.apply(NoteDocument.Edit(removed: selection.strokes, added: strokes, items: edits))
-        setSelection(strokes: strokes, items: items)
+        setSelection(strokes: strokes, items: items, outline: selection.outline)
     }
 
     func duplicateSelection() {
@@ -519,7 +538,8 @@ extension NoteCanvasView {
             return NoteDocument.PlacedItem(item: item, pageID: placed.pageID)
         }
         document.apply(NoteDocument.Edit(added: strokes, items: items.map { .init(pageID: $0.pageID, before: nil, after: $0.item) }))
-        setSelection(strokes: strokes, items: items)
+        var offsetLoop = offset
+        setSelection(strokes: strokes, items: items, outline: selection.outline.map { $0.copy(using: &offsetLoop) ?? $0 })
         presentMenu()
     }
 

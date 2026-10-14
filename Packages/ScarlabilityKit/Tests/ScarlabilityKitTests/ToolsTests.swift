@@ -29,13 +29,60 @@ struct EraserTests {
 
 struct SelectionTests {
     @Test func lassoSelectsStrokesMostlyInside() {
-        let lasso = [CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0), CGPoint(x: 100, y: 100), CGPoint(x: 0, y: 100)]
+        let lasso = Lasso([CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0), CGPoint(x: 100, y: 100), CGPoint(x: 0, y: 100)])
         let inside = Stroke(color: .black, points: (10...90).map { InkPoint(x: Float($0), y: 50, width: 2) })
+        let mostly = Stroke(color: .black, points: (40...130).map { InkPoint(x: Float($0), y: 50, width: 2) })
         let half = Stroke(color: .black, points: (60...150).map { InkPoint(x: Float($0), y: 50, width: 2) })
         let outside = Stroke(color: .black, points: (200...250).map { InkPoint(x: Float($0), y: 50, width: 2) })
-        #expect(StrokeHitTesting.lasso(lasso, selects: inside))
-        #expect(!StrokeHitTesting.lasso(lasso, selects: half))
-        #expect(!StrokeHitTesting.lasso(lasso, selects: outside))
+        #expect(lasso.selects(inside))
+        #expect(lasso.selects(mostly))
+        #expect(!lasso.selects(half))
+        #expect(!lasso.selects(outside))
+    }
+
+    /// Going around twice, the second time a little inside the first (as people do to be sure),
+    /// still selects the middle. With the even-odd rule the middle counted as outside.
+    @Test func lassoDrawnAroundTwiceSelectsTheMiddle() {
+        let spiral = (0...200).map { i -> CGPoint in
+            let t = Double(i) / 100, angle = t * 2 * .pi, radius = 100 - 10 * t
+            return CGPoint(x: 150 + radius * cos(angle), y: 150 + radius * sin(angle))
+        }
+        let lasso = Lasso(spiral)
+        let middle = Stroke(color: .black, points: (130...170).map { InkPoint(x: Float($0), y: 150, width: 2) })
+        let nearTheLine = Stroke(color: .black, points: (215...235).map { InkPoint(x: Float($0), y: 150, width: 2) })
+        #expect(lasso.contains(CGPoint(x: 150, y: 150)))
+        #expect(lasso.selects(middle))
+        #expect(lasso.selects(nearTheLine))
+        #expect(!lasso.contains(CGPoint(x: 300, y: 150)))
+    }
+
+    /// A loop that crosses itself (a figure 8) selects what's in both halves.
+    @Test func lassoCrossingItselfSelectsBothHalves() {
+        let figureEight = (0...200).map { i -> CGPoint in
+            let angle = Double(i) / 200 * 2 * .pi
+            return CGPoint(x: 200 + 150 * sin(angle), y: 100 + 60 * sin(2 * angle))
+        }
+        let lasso = Lasso(figureEight)
+        #expect(lasso.contains(CGPoint(x: 120, y: 100)))
+        #expect(lasso.contains(CGPoint(x: 280, y: 100)))
+        #expect(!lasso.contains(CGPoint(x: 200, y: 30)))
+    }
+
+    /// Long strokes are judged by length, not by how many points they have: a stroke drawn
+    /// slowly outside the loop (many points) and quickly inside it (few points) still counts.
+    @Test func lassoJudgesByLengthNotPointCount() {
+        let lasso = Lasso([CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0), CGPoint(x: 100, y: 100), CGPoint(x: 0, y: 100)])
+        let fastInside = stride(from: 10, through: 90, by: 10).map { InkPoint(x: Float($0), y: 50, width: 2) }
+        let slowOutside = stride(from: 100.5, through: 130, by: 0.5).map { InkPoint(x: Float($0), y: 50, width: 2) }
+        #expect(lasso.selects(Stroke(color: .black, points: fastInside + slowOutside)))
+    }
+
+    @Test func lassoDropsCrowdedPointsButKeepsItsEnds() {
+        let points = (0...1000).map { CGPoint(x: Double($0) * 0.1, y: 0) }
+        let lasso = Lasso(points, spacing: 1)
+        #expect(lasso.outline.count <= 102)
+        #expect(lasso.outline.first == points.first)
+        #expect(lasso.outline.last == points.last)
     }
 
     @Test func movedCopyKeepsDepthButGetsANewID() {

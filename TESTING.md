@@ -23,7 +23,9 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] **Lag:** when you write fast, the ink stays close to the Pencil tip.
 - [ ] **Steady tip (笔尖不动):** watch the line right behind the Pencil as you write small, fast notes. It doesn't wiggle, shift or change thickness after it's drawn.
 - [ ] **钢笔 Fountain pen:** in the pen's row tap **Pen ▾ → Fountain Pen**. Light strokes come out thin and pressing hard gives bold lines, clearly more than the normal Pen. **Pen ▾ → Pen** switches back. Both use the same colors and sizes.
-- [ ] **Pen Feel (笔感):** **⋯ → Settings**. Write in the "Try your pen here" strip at the top (the ink appears exactly under the Pencil) while moving the sliders: **Smoothing 平滑**, **Pen pressure 压感**, **Fountain pen pressure 钢笔压感**, **Tip 跟手** (Steadier ↔ Closer to tip). **Clear** empties the strip and **Reset Pen Feel** puts the sliders back. Write down the numbers you like best and tell me.
+- [ ] **Fountain pen is smooth (fixed):** write a few words of cursive. The thick and thin parts flow into each other, with no lumps (忽粗忽细) where you slow down or turn, and the thinnest lines aren't scratchy or jagged (有棱角). Light pressure is still clearly thinner than firm pressure.
+- [ ] **Pen Feel (笔感):** **⋯ → Settings**. Write in the "Try your pen here" strip at the top while moving the sliders: **Smoothing 平滑**, **Pen pressure 压感**, **Fountain pen pressure 钢笔压感**, **Tip 跟手** (Steadier ↔ Closer to tip). **Clear** (above the strip) empties it and **Reset Pen Feel** puts the sliders back. Write down the numbers you like best and tell me.
+- [ ] **Strip ink under the tip (fixed):** in that strip, write slowly from left to right. The ink appears right under the Pencil and the Settings page stays still (before, writing to the right was taken as "swipe back", so the page slid away). Swiping right on the rest of the Settings page still goes back to the menu.
 - [ ] **Palm:** rest your hand on the screen while writing. The page doesn't move and no marks appear.
 - [ ] **Zoomed in:** zoom in and write. The ink is sharp.
 
@@ -62,6 +64,8 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] You stay on the eraser after lifting the Pencil.
 
 ## 7. Select (M2)
+- [ ] **Freeform deletes what you circle (fixed):** write a few lines, circle the middle of them with **Freeform** (go around twice if you like, or let the loop cross itself), then **Delete**. Everything inside the loop goes, including the writing in the middle. Strokes only partly inside go if most of them is inside.
+- [ ] **The loop stays as the outline (new):** after circling, the dashed outline is your loop's shape, not a box. Dragging inside the loop moves it with the writing; resizing and rotating turn it too. **Box** mode still shows a box.
 - [ ] **Freeform**: draw a loop around some writing. It gets a dashed box and a bar of buttons pops up **above** it (not covering it), centered.
 - [ ] **Box**: drag a rectangle to select.
 - [ ] **Move**: drag inside the box, with the Pencil or a finger.
@@ -260,6 +264,12 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 49. **Both devices change the same shared thing** (e.g. rename the same note at once): the newest change wins. A page deleted on one device stays deleted.
 50. **Everything opens under its button** (your request). Delete questions appear at the item. Anything that should still be a full-screen window?
 51. **Page panel:** "Create Template" (from Notability) isn't there, since templates aren't built yet. Pasted pages go after the page whose ⋯ you used; duplicates go right after the originals. Page search only finds typed text and PDF text. OK?
+
+**From the lasso, strip and fountain pen fixes** (I picked a default for each):
+52. **Freeform outline:** if you go around twice, both loops stay drawn as the outline (that's what you drew). Want it tidied into one loop instead?
+53. **Grabbing a freeform selection:** you move it by dragging inside the loop (or just outside its edge). Starting outside the loop draws a new one, even inside the old box. OK?
+54. **Fountain pen:** its thinnest line is now 45% of the pen size (was 28%) and thickness changes are evened out a little more, so it doesn't look lumpy. Still enough thick and thin? (The **Fountain pen pressure** slider still goes further either way.)
+55. **Strip label:** "Try your pen here" and **Clear** moved just above the strip, so the whole strip is for writing. OK?
 
 ---
 

@@ -7,8 +7,10 @@ import Foundation
 public struct PressureCurve: Hashable, Sendable {
     /// 0 means pressure has no effect; 1 is the strongest effect.
     public var sensitivity: Double
-    /// How far from the base width the line can go at full sensitivity (0.7 → 30%…170%).
+    /// How far above the base width the line can go at full sensitivity (0.7 → up to 170%).
     public var maxSwing: Double
+    /// How far below the base width the line can go at full sensitivity (0.7 → down to 30%).
+    public var thinSwing: Double
     /// Below 1, light pressure ramps the width up quickly, so light writing doesn't look starved;
     /// above 1, light pressure stays thin.
     public var exponent: Double
@@ -20,22 +22,27 @@ public struct PressureCurve: Hashable, Sendable {
     /// gets near the Pencil's maximum, so the full range is reached well before it.
     static let firmForce = 0.55
 
-    public init(sensitivity: Double = PressureCurve.defaultSensitivity, maxSwing: Double = 0.7, exponent: Double = 0.8) {
+    /// - Parameter thinSwing: Defaults to `maxSwing`, so the line goes as far thinner as thicker.
+    public init(sensitivity: Double = PressureCurve.defaultSensitivity, maxSwing: Double = 0.7, thinSwing: Double? = nil,
+                exponent: Double = 0.8) {
         self.sensitivity = sensitivity
         self.maxSwing = maxSwing
+        self.thinSwing = thinSwing ?? maxSwing
         self.exponent = exponent
     }
 
     /// The fountain pen (钢笔): a wider range, and light pressure stays thin, so a line can go
-    /// from a hairline to bold within one stroke.
+    /// from thin to bold within one stroke. Its thinnest line (45% at the default sensitivity) is
+    /// still about two pixels wide: thinner hairlines looked scratchy and jagged on screen.
     public static func fountain(sensitivity: Double = PressureCurve.defaultFountainSensitivity) -> PressureCurve {
-        PressureCurve(sensitivity: sensitivity, maxSwing: 0.9, exponent: 1.2)
+        PressureCurve(sensitivity: sensitivity, maxSwing: 0.9, thinSwing: 0.69, exponent: 1.2)
     }
 
     public func widthFactor(forNormalizedForce force: Double) -> Double {
         let pressure = min(max(force / Self.firmForce, 0), 1)
         let curved = pow(pressure, exponent)
-        let swing = maxSwing * min(max(sensitivity, 0), 1)
-        return 1 - swing + 2 * swing * curved
+        let strength = min(max(sensitivity, 0), 1)
+        let thinnest = 1 - thinSwing * strength, thickest = 1 + maxSwing * strength
+        return thinnest + (thickest - thinnest) * curved
     }
 }

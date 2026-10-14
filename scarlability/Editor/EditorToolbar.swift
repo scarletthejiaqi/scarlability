@@ -850,20 +850,19 @@ struct EditorSettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Above the strip, not on it: the strip keeps every touch for writing.
+            HStack {
+                Text("Try your pen here (\(settings.penStyle.title))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Clear") { clearCount += 1 }
+                    .font(.caption.weight(.semibold))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
             PenTestPad(settings: settings, clearCount: clearCount)
                 .frame(height: 150)
-                .overlay(alignment: .topLeading) {
-                    Text("Try your pen here (\(settings.penStyle.title))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(8)
-                        .allowsHitTesting(false)
-                }
-                .overlay(alignment: .topTrailing) {
-                    Button("Clear") { clearCount += 1 }
-                        .font(.caption.weight(.semibold))
-                        .padding(8)
-                }
             Divider()
             Form {
                 Section {

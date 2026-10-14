@@ -168,7 +168,15 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     struct Selection {
         var strokes: [NoteDocument.PlacedStroke]
         var items: [NoteDocument.PlacedItem] = []
+        /// Around what's selected.
         var box: CGRect
+        /// The loop drawn with freeform Select (content coordinates), shown instead of the box.
+        var outline: CGPath?
+
+        /// What the handles and the menu go around: the loop and everything in it.
+        var frame: CGRect {
+            outline.map { box.union($0.boundingBoxOfPath) } ?? box
+        }
     }
 
     /// A selection being moved, resized or rotated. The transform is in content coordinates.
@@ -751,7 +759,8 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
                 // trackpad reports far fewer, coarser positions than the Pencil, so it gets more.
                 smoothing: (recognizer.touchType == .pencil ? CGFloat(settings.smoothing) : max(CGFloat(settings.smoothing), 1.6))
                     / scrollView.zoomScale,
-                pressureSmoothing: settings.pressureSmoothing / scrollView.zoomScale
+                pressureSmoothing: settings.pressureSmoothing / scrollView.zoomScale,
+                pressureStages: settings.pressureStages
             ),
             color: presets.currentColor,
             displayColor: isHighlighter ? presets.currentColor : presets.currentColor.displayed(on: page.record.paper)
@@ -1134,6 +1143,8 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     /// - `-DebugSelectAll`: selects everything on page 1 and shows the action bar.
     /// - `-DebugPages`: adds two pages, then deletes the first.
     /// - `-DebugShapes`: snaps two lines and drags them (one locks flat), then crosses two highlights.
+    /// - `-DebugLasso` (with `-SeedDemoInk`): circles the writing twice with the freeform lasso,
+    ///   drags the selection, then deletes it.
     /// - `-DebugZoom 2`: zooms in first.
     func startDebugScenarioIfRequested() {
         let zoom = UserDefaults.standard.double(forKey: "DebugZoom")
@@ -1176,6 +1187,10 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             CADisplayLink(target: self, selector: #selector(stepDebugPDF(_:))).add(to: .main, forMode: .common)
             return
         }
+        if arguments.contains("-DebugLasso"), let page = document.pages.first {
+            runDebugLassoScenario(on: page)
+            return
+        }
         if arguments.contains("-DebugShapes"), let page = document.pages.first, let pageView = pageViews[page.id] {
             debugStrokeOrigin = CGPoint(x: pageView.frame.minX + 80, y: pageView.frame.minY + 300)
             liveInk.rasterScale = tileRasterScale
@@ -1194,6 +1209,47 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         }
         liveInk.rasterScale = tileRasterScale
         CADisplayLink(target: self, selector: #selector(stepDebugScenario(_:))).add(to: .main, forMode: .common)
+    }
+
+    /// `-DebugLasso`: at 1 s, a freeform lasso goes around the middle of the writing twice, the
+    /// second time a little inside the first (the middle must be selected too); from 2.5 s the
+    /// selection is dragged down and right for 2 seconds, its loop with it; at 7 s it's deleted.
+    private func runDebugLassoScenario(on page: NoteDocument.Page) {
+        let origin = pageOrigin(page.id)
+        let ink = page.visibleStrokes.reduce(CGRect.null) { $0.union($1.bounds) }.offsetBy(dx: origin.x, dy: origin.y)
+        guard !ink.isNull else { return }
+        settings.tool = .select
+        settings.selectMode = .freeform
+        let center = CGPoint(x: ink.midX, y: ink.midY)
+        let loop = (0...240).map { i -> CGPoint in
+            let turns = CGFloat(i) / 120
+            let angle = turns * 2 * .pi
+            let radiusX = ink.width * 0.4 * (1 - 0.12 * turns), radiusY = ink.height * 0.4 * (1 - 0.12 * turns)
+            return CGPoint(x: center.x + radiusX * cos(angle), y: center.y + radiusY * sin(angle))
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [self] in
+            beginSelectGesture(at: loop[0])
+            loop.dropFirst().forEach(continueSelectGesture)
+            endSelectGesture()
+        }
+        // Dragged a frame at a time, like a real touch.
+        for step in 0...60 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5 + Double(step) / 30) { [self] in
+                let point = CGPoint(x: center.x + 40 * CGFloat(step) / 60, y: center.y + 30 * CGFloat(step) / 60)
+                if step == 0 {
+                    beginSelectGesture(at: point)
+                } else {
+                    continueSelectGesture(point)
+                }
+                if step == 60 {
+                    endSelectGesture()
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 7) { [self] in
+            NSLog("DebugLasso: %d selected before deleting", selection?.strokes.count ?? 0)
+            deleteSelection()
+        }
     }
 
     /// `-DebugShapes`: two lines that snap, then get dragged: the first to 2° (it locks flat),
@@ -1268,7 +1324,8 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         var stroke = ActiveStroke(pageID: page.id, pageView: pageView, tool: tool,
                                   builder: StrokeBuilder(baseWidth: presets.currentSize, curve: settings.pressureCurve,
                                                          smoothing: CGFloat(settings.smoothing) / scrollView.zoomScale,
-                                                         pressureSmoothing: settings.pressureSmoothing / scrollView.zoomScale),
+                                                         pressureSmoothing: settings.pressureSmoothing / scrollView.zoomScale,
+                                                         pressureStages: settings.pressureStages),
                                   color: tool == .pen ? .red : presets.currentColor,
                                   displayColor: tool == .pen ? .red : presets.currentColor)
         if tool == .highlighter { stroke.textPage = textSnapPage(page) }
