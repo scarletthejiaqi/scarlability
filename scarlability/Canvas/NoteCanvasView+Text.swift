@@ -309,6 +309,7 @@ extension NoteCanvasView: UITextViewDelegate {
         let item = PageItem(kind: .text(content), frame: CGRect(origin: local, size: size))
         document.apply(NoteDocument.Edit(items: [.init(pageID: pageID, before: nil, after: item)]))
         setSelection(strokes: [], items: [.init(item: item, pageID: pageID)])
+        presentMenu()
     }
 }
 #endif

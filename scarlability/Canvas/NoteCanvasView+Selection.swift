@@ -56,7 +56,27 @@ extension NoteCanvasView {
 
     @objc func handleSelectionTap(_ tap: UITapGestureRecognizer) {
         guard cropping == nil else { return }
+        guard tool == .select else {
+            // Tapping the page closes a Paste bar.
+            if selection == nil { actionBar.hide() }
+            return
+        }
         selectToolTapped(at: tap.location(in: contentView))
+    }
+
+    /// A long press opens Paste where it was (or, on the selection, the selection's menu). It
+    /// takes over from a lasso or drag that the same touch started.
+    @objc func handlePasteLongPress(_ press: UILongPressGestureRecognizer) {
+        guard press.state == .began, cropping == nil else { return }
+        let point = press.location(in: contentView)
+        if selectionContains(point) {
+            cancelSelectGesture()
+            presentMenu()
+        } else if canPaste {
+            cancelSelectGesture()
+            clearSelection()
+            presentMenu(at: point)
+        }
     }
 
     /// Which part of the selection a touch at `point` (content coordinates) grabs.
@@ -180,11 +200,8 @@ extension NoteCanvasView {
             presentMenu()
             return
         }
-        if selection != nil {
-            clearSelection()
-        } else if canPaste {
-            presentMenu(at: point)
-        }
+        // Tapping empty paper deselects (and closes a Paste bar). Paste is a long press.
+        clearSelection()
     }
 
     /// The topmost text box or image at a point (content coordinates).
@@ -596,12 +613,17 @@ extension NoteCanvasView {
             return
         }
         let board = UIPasteboard.general
+        // What's pasted ends up selected, with Select on to move it (like an inserted picture).
         if let data = board.data(forPasteboardType: Self.selectionPasteboardType),
            let copied = try? JSONDecoder().decode(ClipboardSelection.self, from: data) {
+            settings.tool = .select
+            tool = .select
             pasteSelection(copied, centeredAt: target)
         } else if let image = board.image, let data = image.pngData() {
             insertImages([data], at: target)
         } else if let string = board.string, !string.isEmpty {
+            settings.tool = .select
+            tool = .select
             insertText(string, at: target)
         }
     }

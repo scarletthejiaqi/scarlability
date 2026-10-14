@@ -54,6 +54,8 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     let selectionPan = UIPanGestureRecognizer()
     /// One finger tapping with the select tool: show the menu, deselect, or offer Paste.
     let selectionTap = UITapGestureRecognizer()
+    /// Long-press the page for Paste (a tap never opens it).
+    let pasteLongPress = UILongPressGestureRecognizer()
     /// Delete, Copy, Paste, Cut… above the selection.
     let actionBar = SelectionActionBar()
     /// The note's undo history for the system's Undo and Redo (see NoteCanvasView+Keyboard).
@@ -306,6 +308,9 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         selectionTap.addTarget(self, action: #selector(handleSelectionTap(_:)))
         selectionTap.delegate = self
         scrollView.addGestureRecognizer(selectionTap)
+        pasteLongPress.addTarget(self, action: #selector(handlePasteLongPress(_:)))
+        pasteLongPress.delegate = self
+        scrollView.addGestureRecognizer(pasteLongPress)
 
         let pencil = UIPencilInteraction(delegate: self)
         addInteraction(pencil)
@@ -696,6 +701,10 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             // Writing elsewhere finishes the text box being typed in.
             endTextEditing()
         }
+        if recognizer.state == .began, selection == nil {
+            // Writing closes a Paste bar.
+            actionBar.hide()
+        }
         if cropping != nil {
             handleCropDrag(recognizer.state, at: recognizer.takeSamples().last?.location)
             return
@@ -1053,7 +1062,12 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         // With finger drawing on, one finger already works the select tool through the stroke recognizer.
         let fingerSelects = (tool == .select || cropping != nil) && !drawsWithFinger
         selectionPan.isEnabled = fingerSelects
-        selectionTap.isEnabled = fingerSelects
+        // In the other tools a finger tap just closes a Paste bar.
+        selectionTap.isEnabled = !drawsWithFinger
+        // Long-press for Paste: a finger in any tool (unless fingers draw), and with Select also the
+        // Pencil and a mouse, which otherwise mean writing (holding still snaps a shape).
+        pasteLongPress.allowedTouchTypes = tool == .select ? [pencil, finger, pointer] : drawsWithFinger ? [] : [finger]
+        pasteLongPress.isEnabled = cropping == nil && !pasteLongPress.allowedTouchTypes.isEmpty
     }
 
     @objc private func handleUndoTap() {
@@ -1078,12 +1092,15 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
             if cropping != nil { return true }
             return selectionGrab(at: gestureRecognizer.location(in: contentView)) != nil
         }
+        if gestureRecognizer === pasteLongPress {
+            return activeStroke == nil
+        }
         return super.gestureRecognizerShouldBegin(gestureRecognizer)
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        if gestureRecognizer === undoTap || gestureRecognizer === redoTap {
-            // Palm rejection for the undo/redo taps.
+        if gestureRecognizer === undoTap || gestureRecognizer === redoTap || (gestureRecognizer === pasteLongPress && touch.type == .direct) {
+            // Palm rejection for the undo/redo taps, and so a resting palm doesn't open Paste.
             return touch.majorRadius <= Self.maxFingerRadius
                 && Date().timeIntervalSince(lastPencilActivity) > Self.tapQuietPeriod
         }
@@ -1093,8 +1110,9 @@ final class NoteCanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
         // Writing, pinching, scrolling and taps all watch the same fingers: the stroke recognizer
         // cancels itself when a second finger shows it was a scroll or tap, a pinch takes over
-        // scrolling while it runs, and a tap fails as soon as the fingers move.
-        true
+        // scrolling while it runs, and a tap fails as soon as the fingers move. Only a long press
+        // and a tap are one or the other, so lifting after a long press isn't also a tap.
+        Set([ObjectIdentifier(gestureRecognizer), ObjectIdentifier(other)]) != [ObjectIdentifier(pasteLongPress), ObjectIdentifier(selectionTap)]
     }
 
     // MARK: - Apple Pencil double-tap

@@ -72,7 +72,7 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] **Resize**: drag the bottom-right circle. **Rotate**: drag the circle above the box.
 - [ ] Bar buttons in this order: **Delete, Copy, Paste** (only after copying something), **Cut, Duplicate, Color, Thickness, Copy as Image**. Nothing is hidden behind a ▸ arrow. If the bar is wider than the screen, swipe it left and right.
 - [ ] **Copy as Image**, then paste into Messages or Notes. A picture of the selection appears.
-- [ ] Copy, then tap an empty spot with the Select tool. A **Paste** button appears there.
+- [ ] **Paste is a long press (changed):** copy something, then **press and hold** an empty spot on the page for half a second. A **Paste** button appears there, in **any tool** (with a finger; with Select also the Pencil). A plain tap never shows Paste; tapping elsewhere or starting to write closes it. Pasting turns on Select, so you can move what you pasted right away.
 - [ ] Scroll or zoom while something is selected. The bar follows the selection.
 - [ ] Tap outside the selection to deselect it. Undo puts moved or deleted ink back.
 - [ ] Select writing that crosses two pages, then move it. It stays together.
@@ -127,7 +127,7 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 - [ ] Tap outside the box to finish. The text sits **under** your handwriting, so you can write and highlight over it.
 - [ ] Tap an existing box with the Text tool to edit it again. Deleting all its text removes the box.
 - [ ] With **Select**: tap a text box to select it, then move, resize (the text scales), rotate, recolor, **Edit Text**, Delete.
-- [ ] Copy text in another app, then **Image ▸ Paste** (or tap an empty spot with Select ▸ Paste). It becomes a text box.
+- [ ] Copy text in another app, then **Image ▸ Paste** (or long-press an empty spot ▸ Paste). It becomes a text box.
 
 ## 13. Images (M4)
 - [ ] **Image ▸ Photos**: pick one or more photos. They appear in the middle of the screen, about half a page wide, already selected.
@@ -270,6 +270,7 @@ Tick a box when it works. If it doesn't, write what happened next to it (a scree
 53. **Grabbing a freeform selection:** you move it by dragging inside the loop (or just outside its edge). Starting outside the loop draws a new one, even inside the old box. OK?
 54. **Fountain pen:** its thinnest line is now 45% of the pen size (was 28%) and thickness changes are evened out a little more, so it doesn't look lumpy. Still enough thick and thin? (The **Fountain pen pressure** slider still goes further either way.)
 55. **Strip label:** "Try your pen here" and **Clear** moved just above the strip, so the whole strip is for writing. OK?
+56. **Long press:** Paste appears after holding half a second. Too slow or too quick? With "Draw with finger" on, a finger long press in the pen tools draws instead (use Select, or ⊕ ▸ Paste).
 
 ---
 
